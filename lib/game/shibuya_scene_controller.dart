@@ -36,6 +36,7 @@ class ShibuyaSceneController {
   final List<fs.Node> _taxiNodes = [];
   final List<fs.Node> _driftNodes = [];
   final List<fs.Node> _rain = [];
+  final List<_Train> _trains = [];
   final math.Random _rng = math.Random(7);
 
   // camera state (reference coordinates)
@@ -77,6 +78,7 @@ class ShibuyaSceneController {
     pegman = GlbPegman(glb)..attach(world.refRoot);
     state.setLoading(0.86, 'Loading Tokyo street fleet...');
     _buildTraffic();
+    _buildTrains();
     _buildRain();
     state.setLoading(0.95, 'Placing Shibuya Stream...');
     initialized = true;
@@ -145,6 +147,81 @@ class ShibuyaSceneController {
     }
     for (final c in sim.drift) {
       _driftNodes.add(_car(c.type));
+    }
+  }
+
+  void _buildTrains() {
+    final tracks = level.meta['yamanoteTracks'] as Map<String, dynamic>;
+    for (int e = 0; e < 2; e++) {
+      final pts = [
+        for (final p in tracks[e == 0 ? 'outer' : 'inner'] as List<dynamic>)
+          vm.Vector3((p[0] as num).toDouble(), (p[1] as num).toDouble(),
+              (p[2] as num).toDouble()),
+      ];
+      final cars = <fs.Node>[];
+      for (int c = 0; c < 4; c++) {
+        final t = GlbLibrary.template(glb.props, 'YamanoteTrain');
+        if (t == null) return;
+        GlbLibrary.forEachMaterial(t, (name, p) {
+          String? hex;
+          double k = 0;
+          if (name == 'Yamanote_Lights') {
+            hex = '#FFFBEB';
+            k = 3.6;
+          } else if (name == 'Yamanote_Windows') {
+            hex = '#D4E9FF';
+            k = 1.45;
+          } else if (name == 'Yamanote_Stripe') {
+            hex = '#34A853';
+            k = 0.45;
+          }
+          if (hex != null) {
+            p.material = GlbLibrary.clonePbr(p.material)
+              ..emissiveFactor = hexColor(hex, k)
+              ..emissiveStrength = 1;
+          }
+        });
+        world.refRoot.add(t);
+        cars.add(t);
+      }
+      _trains.add(_Train(Polyline3(pts), cars, e == 0 ? 360 : 625, e == 0 ? 1 : -1));
+    }
+  }
+
+  void _syncTrains(double dt) {
+    const minD = 345.0, maxD = 640.0, base = 8.2, spacing = 15.4;
+    for (final n in _trains) {
+      final total = n.path.length;
+      final a = math.min(maxD, total - 10);
+      if (dt > 1e-6) {
+        final rem = n.dir > 0 ? a - n.distance : n.distance - minD;
+        if (rem <= 0.35 && n.vel.abs() <= 0.85) n.dir = -n.dir;
+        final r2 = n.dir > 0 ? a - n.distance : n.distance - minD;
+        var target = base;
+        if (r2 < 24) target = base * math.sqrt((r2 / 24).clamp(0.0, 1.0));
+        final o = n.dir * target, s = 4.2 * dt;
+        n.vel = (n.vel + (o - n.vel).clamp(-s, s)).clamp(-base, base);
+        final c = n.distance + n.vel * dt;
+        if (c >= a) {
+          n.distance = a;
+          n.vel = 0;
+          n.dir = -1;
+        } else if (c <= minD) {
+          n.distance = minD;
+          n.vel = 0;
+          n.dir = 1;
+        } else {
+          n.distance = c;
+        }
+      }
+      for (int e = 0; e < n.cars.length; e++) {
+        final d = (n.distance - e * spacing).clamp(0.0, total);
+        final tan = vm.Vector3.zero();
+        final p = n.path.at(d / total, tan);
+        n.cars[e].localTransform = GlbLibrary.slot(
+            p.x, (level.meta['yamanoteTracks']['deckY'] as num).toDouble(), p.z,
+            math.atan2(tan.x, tan.z));
+      }
     }
   }
 
@@ -218,6 +295,7 @@ class ShibuyaSceneController {
       }
     }
     _syncProps();
+    _syncTrains(dt);
     _syncHero(dt);
     _computeCamera(dt);
     _syncRain(dt);
@@ -574,4 +652,13 @@ class ShibuyaSceneController {
   }
 
   void dispose() {}
+}
+
+class _Train {
+  _Train(this.path, this.cars, this.distance, this.dir) : vel = 8.2 * dir;
+  final Polyline3 path;
+  final List<fs.Node> cars;
+  double distance;
+  double dir;
+  double vel;
 }
