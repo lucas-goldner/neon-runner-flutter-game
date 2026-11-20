@@ -5,6 +5,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'glb_library.dart';
 import 'level_data.dart';
+import 'media_screen.dart';
 import 'mesh_buf.dart';
 import 'world_builder.dart';
 import 'world_textures.dart';
@@ -52,8 +53,18 @@ class GlbWorld {
 
   /// Rooftop target centre derived from `Podium_PinBeaconRing` (y ≥ 20).
   vm.Vector3 rooftop = vm.Vector3(242.89, 22, 257.3);
-  fs.Node? mediaScreen;
+  MediaScreen? media;
   final List<NeonSign> signs = [];
+
+  /// Photo colliders for the glTF landmarks (`_photoColliders` pushes in
+  /// `_attachHeroArchitecture`): [minX,maxX,minY,maxY,minZ,maxZ].
+  final List<List<double>> colliders = [];
+
+  void _boxCollider(double x, double z, double yaw, double hx, double hz, double y0, double y1) {
+    final c = math.cos(yaw).abs(), sn = math.sin(yaw).abs();
+    final ex = c * hx + sn * hz, ez = sn * hx + c * hz;
+    colliders.add([x - ex, x + ex, y0, y1, z - ez, z + ez]);
+  }
 
   void build() {
     _googleTower();
@@ -290,8 +301,32 @@ class GlbWorld {
       final sc = s['scale'] as List<dynamic>?;
       t.localTransform = GlbLibrary.slot(_d(p[0]), _d(p[1]), _d(p[2]), _d(s['yaw']),
           sc == null ? null : vm.Vector3(_d(sc[0], 1), _d(sc[1], 1), _d(sc[2], 1)));
-      if (node == 'ScrambleMediaFacade') mediaScreen = t.getChildByName('MediaScreenSurface');
+      if (node == 'ScrambleMediaFacade') {
+        final ms = t.getChildByName('MediaScreenSurface');
+        if (ms?.mesh != null) {
+          // MeshStandardMaterial(map = emissiveMap = media canvas, emissive 1.55)
+          final m = fs.PhysicallyBasedMaterial()
+            ..baseColorFactor = vm.Vector4(1, 1, 1, 1)
+            ..emissiveFactor = vm.Vector4(1.55, 1.55, 1.55, 1)
+            ..roughnessFactor = 0.16
+            ..metallicFactor = 0.08
+            ..doubleSided = true;
+          for (final pr in ms!.mesh!.primitives) {
+            pr.material = m;
+          }
+          media = MediaScreen(m);
+        }
+      }
       ref.add(t);
+      // model bounding boxes (structure meshes) → photo colliders
+      const bb = {
+        'ScrambleCornerLandmark': [13.32, 11.3, 34.0],
+        'Shibuya109Landmark': [12.5, 12.5, 34.0],
+        'ScrambleMediaFacade': [15.62, 10.5, 42.06],
+      };
+      final b = bb[node]!;
+      final sx = sc == null ? 1.0 : _d(sc[0], 1), sz = sc == null ? 1.0 : _d(sc[2], 1);
+      _boxCollider(_d(p[0]), _d(p[2]), _d(s['yaw']), b[0] * sx, b[1] * sz, 0, b[2]);
     }
 
     place('ScrambleCornerLandmark', slots['scrambleCorner'] as Map<String, dynamic>?);
@@ -310,6 +345,26 @@ class GlbWorld {
                     : null),
         ];
     final bays = slots['yamanoteViaductBays'] as List<dynamic>? ?? const [];
+    for (final t in bays) {
+      final r = _d(t['yaw']);
+      final sc = t['scale'] as List<dynamic>?;
+      final o = 6.5 * (sc == null ? 1 : _d(sc[0], 1)), sl = 12.2 * (sc == null ? 1 : _d(sc[2], 1));
+      final cx = math.cos(r).abs() * o + math.sin(r).abs() * sl;
+      final lz = math.sin(r).abs() * o + math.cos(r).abs() * sl;
+      final p = t['pos'] as List<dynamic>;
+      colliders.add([_d(p[0]) - cx, _d(p[0]) + cx, 5.5, 8.6, _d(p[2]) - lz, _d(p[2]) + lz]);
+    }
+    for (final b in slots['shopfrontBlocks'] as List<dynamic>? ?? const []) {
+      final a = b['nodeName'] == 'ShibuyaShopfrontBlockA';
+      final hx = a ? (8.1 + 7.16) * 0.5 : (7.39 + 7.12) * 0.5;
+      final hz = a ? (7.39 + 6.08) * 0.5 : (7.39 + 6.28) * 0.5;
+      final h = a ? 25.98 : 32.04;
+      final sc = b['scale'] as List<dynamic>?;
+      final p = b['pos'] as List<dynamic>;
+      _boxCollider(_d(p[0]), _d(p[2]), _d(b['yaw']),
+          hx * (sc == null ? 1 : _d(sc[0], 1)), hz * (sc == null ? 1 : _d(sc[2], 1)), 0,
+          math.max(12, h) * (sc == null ? 1 : _d(sc[1], 1)));
+    }
     final bay = GlbLibrary.template(lib.arch, 'YamanoteViaductBay');
     if (bay != null) ref.add(GlbLibrary.instance(bay, mats(bays), name: 'YamanoteViaductBay'));
     final blocks = slots['shopfrontBlocks'] as List<dynamic>? ?? const [];

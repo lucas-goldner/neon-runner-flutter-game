@@ -154,7 +154,6 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
       if (k == LogicalKeyboardKey.digit1) _state.setPhotoPreset(PhotoPreset.hero);
       if (k == LogicalKeyboardKey.digit2) _state.setPhotoPreset(PhotoPreset.scramble);
       if (k == LogicalKeyboardKey.digit3) _state.setPhotoPreset(PhotoPreset.skyline);
-      _controller.resetPhotoCamera();
     } else if (k == LogicalKeyboardKey.keyA || k == LogicalKeyboardKey.arrowLeft) {
       _controller.moveLane(-1);
     } else if (k == LogicalKeyboardKey.keyD || k == LogicalKeyboardKey.arrowRight) {
@@ -244,10 +243,7 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
                         },
                         onTogglePhoto: _togglePhoto,
                         onPlayAgain: _play,
-                        onPhotoPreset: (p) {
-                          _controller.resetPhotoCamera();
-                          _state.setPhotoPreset(p);
-                        },
+                        onPhotoPreset: _state.setPhotoPreset,
                       ),
                     if (_state.phase == AppPhase.loading)
                       LoadingScreen(state: _state),

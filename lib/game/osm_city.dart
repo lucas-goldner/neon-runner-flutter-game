@@ -206,7 +206,7 @@ class OsmCity {
         mnz = math.min(mnz, q.z);
         mxz = math.max(mxz, q.z);
       }
-      bounds.add([mnx, mxx, mnz, mxz]);
+      bounds.add([mnx, mxx, mnz, mxz, c + (o['isHeroSkyscraper'] == true ? 7.4 : (c >= 58 ? 4.8 : 2.2))]);
       final cen = o['center'] as List<dynamic>;
       final v = _d(cen[0]), y = _d(cen[1]);
       final b = (math.sqrt(_d(o['area'], 250)) * 0.34).clamp(3.0, 14.0);
@@ -290,7 +290,7 @@ class OsmCity {
         crowns.box(vm.Vector3(cx + e * s, h + g * 0.5, cz), vm.Vector3(0.44, g, dd + 0.2), 0);
       }
       if (h >= 60) beacons.add(vm.Vector3(cx, h + p + 0.65, cz));
-      bounds.add([cx - s, cx + s, cz - c, cz + c]);
+      bounds.add([cx - s, cx + s, cz - c, cz + c, h + p]);
     }
 
     final tw = await FacadeTex.create(14598366 + 11, 'tower');

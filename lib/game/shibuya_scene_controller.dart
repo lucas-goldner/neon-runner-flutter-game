@@ -53,8 +53,6 @@ class ShibuyaSceneController {
   final vm.Vector3 _springTgt = vm.Vector3(68, 0, 68);
   final vm.Vector3 _springTgtVel = vm.Vector3.zero();
   bool _camInit = false;
-  double photoOrbit = 0;
-  double photoZoom = 1;
   double _time = 0;
   int _lastCalloutId = -1;
 
@@ -76,6 +74,7 @@ class ShibuyaSceneController {
     await world.buildCity();
     world.build();
     await world.glbWorld.buildSigns();
+    await world.glbWorld.media?.update(0, 1.8, force: true);
     scene.add(world.root);
     state.setLoading(0.8, 'Preparing Pegman...');
     pegman = GlbPegman(glb)..attach(world.refRoot);
@@ -126,7 +125,7 @@ class ShibuyaSceneController {
       ..density = 0.0032;
     scene.postProcess.bloom
       ..enabled = true
-      ..intensity = 0.32
+      ..intensity = 0.18
       ..threshold = 1.0
       ..scatter = 0.62;
     scene.postProcess.vignette
@@ -247,8 +246,7 @@ class ShibuyaSceneController {
     state.beginRun();
     pegman.resetTrail();
     _camInit = false;
-    photoOrbit = 0;
-    photoZoom = 1;
+    _poPreset = null;
     for (final g in world.pinGates) {
       g.setLit(false);
     }
@@ -270,17 +268,49 @@ class ShibuyaSceneController {
     if (state.phase == AppPhase.playing && !state.autoPilot) sim.pressSlide();
   }
 
+  // Photo orbit (port of the demo's _photoOrbit): goals + smoothed state.
+  double _poYaw = 0, _poPitch = 0.3, _poRadius = 10, _poFov = 50;
+  double _goYaw = 0, _goPitch = 0.3, _goRadius = 10, _goFov = 50;
+  final vm.Vector3 _poTarget = vm.Vector3.zero(), _goTarget = vm.Vector3.zero();
+  PhotoPreset? _poPreset;
+
+  static const _photoLimits = {
+    PhotoPreset.hero: [2.8, 18.0, 0.06, 1.15],
+    PhotoPreset.scramble: [14.0, 58.0, 0.14, 1.22],
+    PhotoPreset.skyline: [28.0, 82.0, 0.1, 1.18],
+  };
+
   void orbitPhotoCamera(double dx, [double dy = 0]) {
-    photoOrbit += dx * 0.008;
+    final l = _photoLimits[state.photoPreset]!;
+    _goYaw -= dx * 0.0075;
+    _goPitch = _clamp(_goPitch + dy * 0.006, l[2], l[3]);
   }
 
   void zoomPhotoCamera(double delta) {
-    photoZoom = _clamp(photoZoom * (1 + delta * 0.0015), 0.4, 2.5);
+    final l = _photoLimits[state.photoPreset]!;
+    _goRadius = _clamp(_goRadius * math.exp(_clamp(delta, -180, 180) * 0.0014), l[0], l[1]);
   }
 
-  void resetPhotoCamera() {
-    photoOrbit = 0;
-    photoZoom = 1;
+  /// `_setPhotoPresetGoal(preset, snap)`.
+  void resetPhotoCamera() => _poPreset = null;
+
+  void _setPhotoGoal(PhotoPreset p, bool snap) {
+    final (pos, tgt, fov) = _presetCamera(p);
+    final l = _photoLimits[p]!;
+    final c = pos - tgt;
+    final d = c.length;
+    _goTarget.setFrom(tgt);
+    _goRadius = _clamp(d, l[0], l[1]);
+    _goYaw = math.atan2(c.x, c.z);
+    _goPitch = _clamp(math.asin(_clamp(c.y / math.max(d, 0.01), -0.95, 0.95)), l[2], l[3]);
+    _goFov = fov;
+    if (snap) {
+      _poTarget.setFrom(_goTarget);
+      _poRadius = _goRadius;
+      _poYaw = _goYaw;
+      _poPitch = _goPitch;
+      _poFov = _goFov;
+    }
   }
 
   // --------------------------------------------------------------- tick
@@ -333,6 +363,11 @@ class ShibuyaSceneController {
 
   void _syncProps() {
     _syncMapsMorph();
+    // Animated Scramble media screen while it can be seen.
+    final dm = math.sqrt(math.pow(camPos.x + 2.5, 2) + math.pow(camPos.z + 41.5, 2));
+    if (dm < 260 && state.phase != AppPhase.mapsTitle) {
+      world.glbWorld.media?.update(_time, sim.voltage);
+    }
     for (int i = 0; i < world.railMats.length && i < sim.rails.length; i++) {
       final hero = sim.rails[i].isHero;
       final active = sim.activeRail == i;
@@ -341,8 +376,12 @@ class ShibuyaSceneController {
           ? hexColor('#FFA27A', 3.4)
           : (hero ? hexColor('#38BDF8', 1.55) : hexColor('#FF4F00', 0.72));
     }
+    // Rings stay in the world after a fly-through (the demo only changes
+    // their glow); a collected ring glows brighter.
     for (int i = 0; i < world.rings.length; i++) {
-      world.rings[i].node.visible = !sim.ringHit[i];
+      final g = world.rings[i].glow;
+      final want = sim.ringHit[i] ? 2.2 : 1.0;
+      g.material.emissiveFactor = g.baseEmissive * want;
     }
     for (int i = 0; i < world.pinGates.length; i++) {
       final lit = sim.gateLit[i];
@@ -655,37 +694,142 @@ class ShibuyaSceneController {
     camUp = vm.Vector3(0, 1, 0);
   }
 
-  void _photoCamera() {
-    vm.Vector3 pos, tgt;
-    double fov;
-    switch (state.photoPreset) {
+  (vm.Vector3, vm.Vector3, double) _presetCamera(PhotoPreset p) {
+    switch (p) {
       case PhotoPreset.scramble:
-        pos = vm.Vector3(-72, 26, 22);
-        tgt = vm.Vector3(-10, 4.5, -18);
-        fov = 54;
+        return (vm.Vector3(-72, 26, 22), vm.Vector3(-10, 4.5, -18), 54);
       case PhotoPreset.skyline:
         final gt = level.meta['googleTower'] as Map<String, dynamic>;
         final e = gt['signCenter'] as List<dynamic>;
         final yaw = (gt['facingYaw'] as num).toDouble();
-        pos = vm.Vector3((e[0] as num).toDouble() + math.sin(yaw - 0.12) * 38,
-            29, (e[2] as num).toDouble() + math.cos(yaw - 0.12) * 38);
-        tgt = vm.Vector3(253, 24.5, 236);
-        fov = 54;
+        return (
+          vm.Vector3((e[0] as num).toDouble() + math.sin(yaw - 0.12) * 38, 29,
+              (e[2] as num).toDouble() + math.cos(yaw - 0.12) * 38),
+          vm.Vector3(253, 24.5, 236),
+          54
+        );
       case PhotoPreset.hero:
         final n = sim.yaw + 0.62;
-        pos = vm.Vector3(sim.x - math.sin(n) * 4.4, sim.y + 1.85,
-            sim.z - math.cos(n) * 4.4);
-        tgt = vm.Vector3(sim.x, sim.y + 1.15, sim.z);
-        fov = 50;
+        return (
+          vm.Vector3(sim.x - math.sin(n) * 4.4, sim.y + 1.85, sim.z - math.cos(n) * 4.4),
+          vm.Vector3(sim.x, sim.y + 1.15, sim.z),
+          50
+        );
     }
-    final off = (pos - tgt) * photoZoom;
-    final ca = math.cos(photoOrbit), sa = math.sin(photoOrbit);
-    final rx = off.x * ca - off.z * sa, rz = off.x * sa + off.z * ca;
-    camPos.setValues(tgt.x + rx, tgt.y + off.y, tgt.z + rz);
-    camTarget.setFrom(tgt);
-    camFov = fov;
+  }
+
+  void _photoCamera() {
+    final p = state.photoPreset;
+    if (_poPreset != p) {
+      _setPhotoGoal(p, _poPreset == null);
+      _poPreset = p;
+    }
+    const e = 0.16;
+    final l = _photoLimits[p]!;
+    var r = _goYaw - _poYaw;
+    while (r > math.pi) {
+      r -= 2 * math.pi;
+    }
+    while (r < -math.pi) {
+      r += 2 * math.pi;
+    }
+    _poYaw += r * e;
+    _poPitch = _clamp(_lerp(_poPitch, _goPitch, e), l[2], l[3]);
+    _poRadius = _clamp(_lerp(_poRadius, _goRadius, e), l[0], l[1]);
+    _poFov = _lerp(_poFov, _goFov, e);
+    _poTarget.setFrom(_poTarget + (_goTarget - _poTarget) * e);
+    final cp = math.cos(_poPitch);
+    final a = _poTarget.x + _poRadius * cp * math.sin(_poYaw);
+    final o = math.max(1.4, _poTarget.y + _poRadius * math.sin(_poPitch));
+    final s = _poTarget.z + _poRadius * cp * math.cos(_poYaw);
+    camPos.setFrom(_safePhotoPos(_poTarget, vm.Vector3(a, o, s)));
+    camTarget.setFrom(_poTarget);
+    camFov = _poFov;
     camUp = vm.Vector3(0, 1, 0);
     camRoll = 0;
+  }
+
+  /// `_resolveSafePhotoCameraPos`: pull the camera in front of buildings
+  /// between it and the target, then push it out of any it sits inside.
+  vm.Vector3 _safePhotoPos(vm.Vector3 t, vm.Vector3 want) {
+    final cols = world.photoColliders;
+    var o = want.x, sy = math.max(1.4, want.y), c = want.z;
+    final dx = o - t.x, dy = sy - t.y, dz = c - t.z;
+    final p = math.sqrt(dx * dx + dy * dy + dz * dz);
+    if (p > 0.05) {
+      final ix = dx / p, iy = dy / p, iz = dz / p;
+      var h = p;
+      const g = 1.45, gy = 0.65;
+      for (final b in cols) {
+        final hit = _rayBox(t.x, t.y, t.z, ix, iy, iz, h, b[0] - g, b[2] - gy, b[4] - g,
+            b[1] + g, b[3] + gy, b[5] + g);
+        if (hit != null) {
+          if (hit.$1 > 0.12) {
+            final e = math.max(2.6, hit.$1 - 0.55);
+            if (e < h) h = e;
+          } else if (hit.$2 > 0.12 && h <= hit.$2) {
+            final e = math.max(2.6, math.min(h, 3.0));
+            if (e < h) h = e;
+          }
+        }
+      }
+      if (h < p) {
+        o = t.x + ix * h;
+        sy = math.max(1.4, t.y + iy * h);
+        c = t.z + iz * h;
+      }
+    }
+    const m = 1.35, hh = 0.55;
+    for (int it = 0; it < 3; it++) {
+      var moved = false;
+      for (final b in cols) {
+        final r0 = b[0] - m, i0 = b[1] + m, a0 = b[2] - hh, u0 = b[3] + hh, d0 = b[4] - m, f0 = b[5] + m;
+        if (o > r0 && o < i0 && sy > a0 && sy < u0 && c > d0 && c < f0) {
+          final tl = o - r0, ar = i0 - o, lz = c - d0, pz = f0 - c, my = u0 - sy;
+          if (b[3] <= 25 && my <= 4.8) {
+            sy = u0 + 0.55;
+          } else {
+            final e = [tl, ar, lz, pz].reduce(math.min);
+            if (my < e && b[3] <= 40) {
+              sy = u0 + 0.55;
+            } else if (e == tl) {
+              o = r0 - 0.15;
+            } else if (e == ar) {
+              o = i0 + 0.15;
+            } else if (e == lz) {
+              c = d0 - 0.15;
+            } else {
+              c = f0 + 0.15;
+            }
+          }
+          sy = math.max(1.4, sy);
+          moved = true;
+        }
+      }
+      if (!moved) break;
+    }
+    return vm.Vector3(o, sy, c);
+  }
+
+  (double, double)? _rayBox(double ox, double oy, double oz, double dx, double dy, double dz,
+      double maxT, double x0, double y0, double z0, double x1, double y1, double z1) {
+    var tmin = -double.infinity, tmax = double.infinity;
+    for (final (o, d, lo, hi) in [(ox, dx, x0, x1), (oy, dy, y0, y1), (oz, dz, z0, z1)]) {
+      if (d.abs() > 1e-7) {
+        var a = (lo - o) / d, b = (hi - o) / d;
+        if (a > b) {
+          final t = a;
+          a = b;
+          b = t;
+        }
+        if (a > tmin) tmin = a;
+        if (b < tmax) tmax = b;
+      } else if (o < lo || o > hi) {
+        return null;
+      }
+    }
+    if (tmax < math.max(0, tmin) || tmin > maxT) return null;
+    return (tmin, tmax);
   }
 
   fs.Camera buildCamera(Duration elapsed) {

@@ -110,6 +110,16 @@ class ShibuyaWorld {
     _footprintBoxes.addAll(city.bounds);
   }
 
+  /// Photo-camera colliders: [minX,maxX,minY,maxY,minZ,maxZ] (demo's
+  /// `_photoColliders`), from the OSM city plus the hero arch boxes.
+  List<List<double>> get photoColliders => [
+        for (final b in _footprintBoxes)
+          [b[0], b[1], 0.0, b.length > 4 ? b[4] : 30.0, b[2], b[3]],
+        [209, 260, 0, 182, 254, 295],
+        [223, 269, 0, 22.1, 237, 262],
+        ...glbWorld.colliders,
+      ];
+
   /// Rough footprint test (axis-aligned boxes of the OSM buildings).
   bool insideBuilding(double x, double z, double pad) {
     for (final b in _footprintBoxes) {
