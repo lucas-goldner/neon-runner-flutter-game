@@ -3,9 +3,11 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart' as fs;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'glb_library.dart';
 import 'level_data.dart';
 import 'mesh_buf.dart';
 import 'route_spline.dart';
+import 'world_glb.dart';
 import 'world_textures.dart';
 
 vm.Vector4 hexColor(String hex, [double scale = 1.0, double alpha = 1.0]) {
@@ -40,10 +42,12 @@ fs.UnlitMaterial unlit(vm.Vector4 color) => fs.UnlitMaterial()
 
 /// A neon prop whose glow can be ignited at runtime.
 class GlowProp {
-  GlowProp(this.material, this.baseEmissive, {this.litScale = 2.2});
+  GlowProp(this.material, this.baseEmissive,
+      {this.litScale = 2.2, this.letterIndex = -1});
   final fs.PhysicallyBasedMaterial material;
   final vm.Vector4 baseEmissive;
   final double litScale;
+  final int letterIndex;
   bool lit = false;
 
   void setLit(bool v, [double pulse = 1.0]) {
@@ -64,22 +68,30 @@ class RingProp {
 /// Static + semi-static 3D content of the Shibuya route, built once from
 /// [ShibuyaLevel] data in the reference's coordinates (mirrored via [w3]).
 class ShibuyaWorld {
-  ShibuyaWorld(this.level, this.spline, this.tex);
+  ShibuyaWorld(this.level, this.spline, this.tex, this.glb);
 
   final ShibuyaLevel level;
   final RouteSpline spline;
   final WorldTextures tex;
+  final GlbLibrary glb;
 
   final fs.Node root = fs.Node(name: 'shibuya_world');
+
+  /// Holds content placed directly in the demo's right-handed three.js
+  /// coordinates (glTF models); mirrors Z into Flutter Scene's view frame.
+  final fs.Node refRoot = fs.Node(name: 'ref_frame')
+    ..localTransform = vm.Matrix4.diagonal3Values(1, 1, -1);
+  late final GlbWorld glbWorld;
   final List<RingProp> rings = [];
   final List<GlowProp> pinGates = [];
   final List<GlowProp> slidePortals = [];
   final List<GlowProp> googleLetters = [];
   final List<GlowProp> bladeSigns = [];
-  late final fs.Node beaconRing;
-  late final fs.PhysicallyBasedMaterial beaconMat;
+  fs.PhysicallyBasedMaterial? beaconMat;
+  final List<List<double>> _footprintBoxes = [];
 
   void build() {
+    root.add(refRoot);
     _ground();
     _buildings();
     _shopfrontsAndSigns();
@@ -87,12 +99,18 @@ class ShibuyaWorld {
     _yamanote();
     _grindRails();
     _wallRuns();
-    _boostRings();
     _barriers();
-    _slidePortals();
-    _pinGates();
-    _streetLamps();
-    _googleTower();
+    glbWorld = GlbWorld(this, glb)..build();
+  }
+
+  /// Rough footprint test (axis-aligned boxes of the OSM buildings).
+  bool insideBuilding(double x, double z, double pad) {
+    for (final b in _footprintBoxes) {
+      if (x > b[0] - pad && x < b[1] + pad && z > b[2] - pad && z < b[3] + pad) {
+        return true;
+      }
+    }
+    return false;
   }
 
   void _add(MeshBuf b, fs.Material m, [String name = '']) {
@@ -134,8 +152,15 @@ class ShibuyaWorld {
     final known = <String>{};
     final pick = math.Random(1335178864);
     for (final bd in level.buildings) {
-      if (bd['isGoogleHero'] == true) continue;
       final fp = ShibuyaLevel.pts(bd['footprint']);
+      known.add('${fp.first.x.toStringAsFixed(1)},${fp.first.z.toStringAsFixed(1)}');
+      if (bd['isGoogleHero'] == true || bd['replacedByHeroArch'] == true) continue;
+      _footprintBoxes.add([
+        fp.map((q) => q.x).reduce(math.min),
+        fp.map((q) => q.x).reduce(math.max),
+        fp.map((q) => q.z).reduce(math.min),
+        fp.map((q) => q.z).reduce(math.max),
+      ]);
       final h = (bd['height'] as num).toDouble();
       final style = bd['archStyle'] as String? ?? 'urban_block';
       final target = style == 'modern_glass_tower'
@@ -291,54 +316,7 @@ class ShibuyaWorld {
   // ---------------------------------------- shopfronts hosting neon signs
   void _shopfrontsAndSigns() {
     final props = level.route['streetProps'] as Map<String, dynamic>;
-    final hosts = <String, List<Map<String, dynamic>>>{};
-    for (final k in ['bladeSigns', 'wallBillboards']) {
-      for (final s in props[k] as List<dynamic>) {
-        final m = s as Map<String, dynamic>;
-        if (m['hostType'] == 'shopfront' && m['hostId'] != null) {
-          hosts.putIfAbsent(m['hostId'] as String, () => []).add(m);
-        }
-      }
-    }
-    final walls = MeshBuf();
-    final roofs = MeshBuf();
-    hosts.forEach((id, signs) {
-      // Wall line through the sign wall points, extruded 14 m inward.
-      final n = signs.first['wallNormal'] as List<dynamic>;
-      final nx = (n[0] as num).toDouble(), nz = (n[2] as num).toDouble();
-      final tx = -nz, tz = nx; // along-wall direction
-      double minT = 1e9, maxT = -1e9;
-      final wp0 = signs.first['wallPoint'] as List<dynamic>;
-      final ox = (wp0[0] as num).toDouble(), oz = (wp0[2] as num).toDouble();
-      double hostH = 0;
-      for (final s in signs) {
-        final wp = s['wallPoint'] as List<dynamic>;
-        final t = ((wp[0] as num).toDouble() - ox) * tx +
-            ((wp[2] as num).toDouble() - oz) * tz;
-        minT = math.min(minT, t);
-        maxT = math.max(maxT, t);
-        hostH = math.max(hostH, (s['hostHeight'] as num?)?.toDouble() ?? 20);
-      }
-      minT -= 7;
-      maxT += 7;
-      const depth = 14.0;
-      final fp = [
-        XZ(ox + tx * minT, oz + tz * minT),
-        XZ(ox + tx * maxT, oz + tz * maxT),
-        XZ(ox + tx * maxT - nx * depth, oz + tz * maxT - nz * depth),
-        XZ(ox + tx * minT - nx * depth, oz + tz * minT - nz * depth),
-      ];
-      _prism(walls, roofs, fp, 0, hostH);
-    });
-    _add(
-        walls,
-        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.7, metallic: 0.15)
-          ..baseColorTexture = tex.facadeBase
-          ..emissiveTexture = tex.facadeGlow
-          ..emissiveFactor = vm.Vector4(1.35, 1.3, 1.3, 1),
-        'shopfronts');
-    _add(roofs, pbr(hexColor('#1A2338'), emissive: hexColor('#0D1426')),
-        'shopfront_roofs');
+
 
     // Neon blade signs & billboards, grouped by accent colour.
     final byAccent = <String, MeshBuf>{};
@@ -583,28 +561,6 @@ class ShibuyaWorld {
         'wall_run_frames');
   }
 
-  // ------------------------------------------------------------ boost rings
-  void _boostRings() {
-    final geo = fs.TorusGeometry(
-        radius: 2.4, tubeRadius: 0.16, radialSegments: 8, tubularSegments: 6);
-    for (final r in level.route['boostRings'] as List<dynamic>) {
-      final m = r as Map<String, dynamic>;
-      final pos = m['pos'] as List<dynamic>;
-      final em = hexColor('#FF8E6B', 2.2);
-      final mat = pbr(hexColor('#FFD1C2', 0.8),
-          emissive: em, roughness: 0.2, metallic: 0.3);
-      final node = fs.Node(name: m['id'] as String, mesh: fs.Mesh(geo, mat))
-        ..position = w3((pos[0] as num).toDouble(), (pos[1] as num).toDouble(),
-            (pos[2] as num).toDouble())
-        ..rotation = yawQuat(mirrorYaw((m['yaw'] as num).toDouble()));
-      // Torus lies in XZ; stand it up to face along the route.
-      node.rotation = node.rotation *
-          vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), math.pi / 2) *
-          vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), math.pi / 8);
-      root.add(node);
-      rings.add(RingProp(node, GlowProp(mat, em, litScale: 0.35), m));
-    }
-  }
 
   // ---------------------------------------------------------- barriers
   void _barriers() {
@@ -630,227 +586,7 @@ class ShibuyaWorld {
         'barrier_stripes');
   }
 
-  // -------------------------------------------------- neon slide arches
-  void _slidePortals() {
-    for (final p in level.route['slidePortals'] as List<dynamic>) {
-      final pos = p['pos'] as List<dynamic>;
-      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
-      final gy = (p['groundY'] as num?)?.toDouble() ?? 0;
-      final half = (p['postHalfSpan'] as num?)?.toDouble() ?? 5.85;
-      final top = (p['solidArchTopY'] as num?)?.toDouble() ?? 6.45;
-      final bottom = (p['solidArchBottomY'] as num?)?.toDouble() ?? 2.65;
-      final laserY = (p['laserTopY'] as num?)?.toDouble() ?? 2.5;
-      final yaw = mirrorYaw((p['yaw'] as num).toDouble());
-      final c = w3(x, gy, z);
-      final frame = MeshBuf();
-      final neon = MeshBuf();
-      final laser = MeshBuf();
-      final cy = math.cos(yaw), sy = math.sin(yaw);
-      vm.Vector3 off(double lx, double y) =>
-          vm.Vector3(c.x + lx * cy, c.y + y, c.z - lx * sy);
-      for (final sd in [-1.0, 1.0]) {
-        frame.box(off(sd * half, top / 2), vm.Vector3(0.7, top, 0.7), yaw);
-        neon.box(off(sd * (half - 0.4), top / 2), vm.Vector3(0.12, top - 0.6, 0.76), yaw);
-      }
-      frame.box(off(0, top - 0.4), vm.Vector3(half * 2 + 2.2, 0.8, 0.9), yaw);
-      frame.box(off(0, bottom + 0.6), vm.Vector3(half * 2, 0.5, 0.6), yaw);
-      neon.box(off(0, top - 0.95), vm.Vector3(half * 2 + 1.6, 0.14, 0.95), yaw);
-      neon.box(off(0, bottom + 0.3), vm.Vector3(half * 2 - 0.6, 0.12, 0.66), yaw);
-      // laser bar at slide height
-      laser.box(off(0, laserY - 0.3), vm.Vector3(half * 2 - 0.8, 0.08, 0.08), yaw);
-      laser.box(off(0, laserY - 0.9), vm.Vector3(half * 2 - 0.8, 0.08, 0.08), yaw);
-      _add(frame, pbr(hexColor('#111827'), emissive: hexColor('#0B1020'), roughness: 0.4), 'portal_frame');
-      final em = hexColor((p['accent'] as String?) ?? '#38BDF8', 2.6);
-      final nm = pbr(hexColor((p['accent'] as String?) ?? '#38BDF8', 0.6), emissive: em);
-      _add(neon, nm, 'portal_neon');
-      final lem = hexColor((p['secondaryAccent'] as String?) ?? '#FF4F00', 3.4);
-      final lm = pbr(hexColor('#FF4F00', 0.6), emissive: lem);
-      _add(laser, lm, 'portal_laser');
-      slidePortals.add(GlowProp(nm, em, litScale: 1.8));
-    }
-  }
 
-  // -------------------------------------------------------- pin gates
-  void _pinGates() {
-    for (final g in level.route['pinGates'] as List<dynamic>) {
-      final pos = g['pos'] as List<dynamic>;
-      final x = (pos[0] as num).toDouble(),
-          y = (pos[1] as num).toDouble(),
-          z = (pos[2] as num).toDouble();
-      final half = (g['postHalfSpan'] as num?)?.toDouble() ?? 5.6;
-      final h = (g['clearHeight'] as num?)?.toDouble() ?? 7.87;
-      final yaw = mirrorYaw((g['yaw'] as num).toDouble());
-      final c = w3(x, y, z);
-      final cy = math.cos(yaw), sy = math.sin(yaw);
-      vm.Vector3 off(double lx, double yy) =>
-          vm.Vector3(c.x + lx * cy, c.y + yy, c.z - lx * sy);
-      final frame = MeshBuf();
-      final glow = MeshBuf();
-      for (final sd in [-1.0, 1.0]) {
-        frame.box(off(sd * half, h / 2), vm.Vector3(0.45, h, 0.45), yaw);
-        glow.box(off(sd * half, h / 2), vm.Vector3(0.16, h - 0.4, 0.5), yaw);
-      }
-      frame.box(off(0, h), vm.Vector3(half * 2 + 0.45, 0.5, 0.5), yaw);
-      glow.box(off(0, h - 0.12), vm.Vector3(half * 2 - 0.2, 0.12, 0.56), yaw);
-      // Street View pin marker above the gate
-      glow.box(off(0, h + 1.5), vm.Vector3(1.4, 1.4, 0.35), yaw);
-      frame.box(off(0, h + 0.55), vm.Vector3(0.25, 0.9, 0.25), yaw);
-      _add(frame, pbr(hexColor('#1E293B'), emissive: hexColor('#0B1020')), 'pin_gate_frame');
-      final col = (g['color'] as String?) ?? '#4285F4';
-      final em = hexColor(col, 1.4);
-      final m = pbr(hexColor(col, 0.6), emissive: em);
-      _add(glow, m, 'pin_gate_glow');
-      pinGates.add(GlowProp(m, em, litScale: 2.4));
-    }
-  }
 
-  // ------------------------------------------------------- street lamps
-  void _streetLamps() {
-    final pole = MeshBuf();
-    final lamp = MeshBuf();
-    final props = level.route['streetProps'] as Map<String, dynamic>;
-    for (final l in props['streetLamps'] as List<dynamic>) {
-      final pos = l['pos'] as List<dynamic>;
-      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
-      final h = (l['height'] as num?)?.toDouble() ?? 7.5;
-      final yaw = mirrorYaw((l['yaw'] as num).toDouble());
-      pole.box(w3(x, h / 2, z), vm.Vector3(0.18, h, 0.18), yaw);
-      lamp.box(w3(x, h, z), vm.Vector3(0.5, 0.2, 1.4), yaw);
-    }
-    for (final gt in props['trafficGantries'] as List<dynamic>) {
-      final pos = gt['pos'] as List<dynamic>;
-      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
-      final yaw = mirrorYaw((gt['yaw'] as num).toDouble());
-      pole.box(w3(x, 3.4, z), vm.Vector3(0.3, 6.8, 0.3), yaw);
-      lamp.box(w3(x, 6.6, z), vm.Vector3(0.6, 1.4, 0.4), yaw);
-    }
-    // Blue MLIT "aokanban" direction signs on cantilever arms.
-    final board = MeshBuf();
-    final boardEdge = MeshBuf();
-    for (final rs in props['roadSigns'] as List<dynamic>) {
-      final pos = rs['pos'] as List<dynamic>;
-      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
-      final yaw = mirrorYaw((rs['yaw'] as num).toDouble());
-      final top = (rs['poleTopY'] as num?)?.toDouble() ?? 8.5;
-      final by = (rs['bottomY'] as num?)?.toDouble() ?? 6.2;
-      final ty = (rs['topY'] as num?)?.toDouble() ?? 8.35;
-      final bw = (rs['boardWidth'] as num?)?.toDouble() ?? 4.4;
-      final off = (rs['armCenterOffset'] as num?)?.toDouble() ?? -3.1;
-      final reach = (rs['armReach'] as num?)?.toDouble() ?? 5.2;
-      final gy = (rs['groundY'] as num?)?.toDouble() ?? 0;
-      final c = w3(x, gy, z);
-      final cy = math.cos(yaw), sy = math.sin(yaw);
-      vm.Vector3 at(double lx, double y) =>
-          vm.Vector3(c.x + lx * cy, y, c.z - lx * sy);
-      pole.box(at(0, gy + top / 2), vm.Vector3(0.24, top, 0.24), yaw);
-      pole.box(at(off / 2, gy + ty + 0.05), vm.Vector3(reach, 0.16, 0.16), yaw);
-      boardEdge.box(at(off, gy + (by + ty) / 2), vm.Vector3(bw + 0.16, ty - by + 0.16, 0.1), yaw);
-      board.box(at(off, gy + (by + ty) / 2), vm.Vector3(bw, ty - by, 0.16), yaw);
-    }
-    _add(boardEdge, pbr(hexColor('#E2E8F0'), emissive: hexColor('#BFDBFE', 0.6)), 'aokanban_edge');
-    _add(board, pbr(hexColor('#0052A5'), emissive: hexColor('#0066CC', 1.1)), 'aokanban');
-    // Pedestrian guard rails along the kerbs.
-    final rails = MeshBuf();
-    for (final pr in props['pedestrianRails'] as List<dynamic>) {
-      final pos = pr['pos'] as List<dynamic>;
-      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
-      final yaw = mirrorYaw((pr['yaw'] as num).toDouble());
-      final len = (pr['length'] as num?)?.toDouble() ?? 3.0;
-      rails.box(w3(x, 0.95, z), vm.Vector3(0.06, 0.06, len), yaw);
-      rails.box(w3(x, 0.55, z), vm.Vector3(0.04, 0.04, len), yaw);
-      final cy = math.cos(yaw), sy = math.sin(yaw);
-      for (final t in [-0.5, 0.0, 0.5]) {
-        final p = w3(x, 0.5, z) + vm.Vector3(len * t * sy, 0, len * t * cy);
-        rails.box(p, vm.Vector3(0.06, 1.0, 0.06), yaw);
-      }
-    }
-    _add(rails, pbr(hexColor('#94A3B8'), emissive: hexColor('#334155', 0.5), metallic: 0.7, roughness: 0.35),
-        'pedestrian_rails');
-    _add(pole, pbr(hexColor('#334155'), emissive: hexColor('#0F172A'), metallic: 0.6, roughness: 0.4),
-        'lamp_poles');
-    _add(lamp, pbr(hexColor('#FFF3EC'), emissive: hexColor('#FFE2B8', 3.0)), 'lamp_heads');
-  }
 
-  // ------------------------------------------- Shibuya Stream / Google
-  void _googleTower() {
-    final gt = level.meta['googleTower'] as Map<String, dynamic>;
-    final hero = level.buildings.firstWhere((b) => b['isGoogleHero'] == true,
-        orElse: () => null);
-    final walls = MeshBuf();
-    final roofs = MeshBuf();
-    if (hero != null) {
-      final fp = ShibuyaLevel.pts(hero['footprint']);
-      // podium up to the 22 m rooftop terrace
-      _prism(walls, roofs, fp, 0, 22);
-      // Tower shaft rises behind the rooftop terrace (away from the facade
-      // the finale camera orbits on), leaving the 22 m roof open.
-      final bcn = gt['rooftopBeacon'] as List<dynamic>;
-      final fn = gt['facadeNormal'] as List<dynamic>;
-      final fnx = (fn[0] as num).toDouble(), fnz = (fn[2] as num).toDouble();
-      final tcx = (bcn[0] as num).toDouble() - fnx * 24;
-      final tcz = (bcn[2] as num).toDouble() - fnz * 24;
-      final ax = -fnz, az = fnx; // along the facade
-      const hw = 15.0, hd = 11.0;
-      final tower = [
-        XZ(tcx + ax * hw + fnx * hd, tcz + az * hw + fnz * hd),
-        XZ(tcx - ax * hw + fnx * hd, tcz - az * hw + fnz * hd),
-        XZ(tcx - ax * hw - fnx * hd, tcz - az * hw - fnz * hd),
-        XZ(tcx + ax * hw - fnx * hd, tcz + az * hw - fnz * hd),
-      ];
-      _prism(walls, roofs, tower, 0, (gt['height'] as num).toDouble());
-    }
-    _add(
-        walls,
-        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.25, metallic: 0.55)
-          ..baseColorTexture = tex.glassBase
-          ..emissiveTexture = tex.glassGlow
-          ..emissiveFactor = vm.Vector4(1.2, 1.35, 1.6, 1),
-        'google_stream_tower');
-    _add(roofs, pbr(hexColor('#1E293B'), emissive: hexColor('#111A2C')), 'google_roof');
-
-    // "Google" sign: six glyph panels on the facade, ordered left→right as
-    // seen from the street (viewer right = (nz, -nx) in the reference frame).
-    final sc = gt['signCenter'] as List<dynamic>;
-    final n = gt['facadeNormal'] as List<dynamic>;
-    final nx = (n[0] as num).toDouble(), nz = (n[2] as num).toDouble();
-    final rx = nz, rz = -nx;
-    final colors = ['#4285F4', '#EA4335', '#FBBC05', '#4285F4', '#34A853', '#EA4335'];
-    final backing = MeshBuf();
-    final scx = (sc[0] as num).toDouble(), scy = (sc[1] as num).toDouble();
-    final scz = (sc[2] as num).toDouble();
-    backing.box(w3(scx + nx * 0.3, scy, scz + nz * 0.3),
-        vm.Vector3(21, 5.6, 0.3), yawFromDir(nx, nz));
-    _add(backing, pbr(hexColor('#0B1020'), roughness: 0.5), 'google_sign_backing');
-    const lw = 3.2, lh = 4.0;
-    for (int i = 0; i < 6; i++) {
-      final off = (i - 2.5) * lw;
-      final cx = scx + rx * off + nx * 0.5, cz = scz + rz * off + nz * 0.5;
-      final buf = MeshBuf();
-      buf.quad(
-        w3(cx - rx * lw / 2, scy - lh / 2, cz - rz * lw / 2),
-        w3(cx + rx * lw / 2, scy - lh / 2, cz + rz * lw / 2),
-        w3(cx + rx * lw / 2, scy + lh / 2, cz + rz * lw / 2),
-        w3(cx - rx * lw / 2, scy + lh / 2, cz - rz * lw / 2),
-        vm.Vector3(nx, 0, -nz),
-        u0: 0, u1: 1, v0: 1, v1: 0,
-      );
-      final em = hexColor(colors[i], 3.4);
-      final m = pbr(hexColor(colors[i], 0.5), emissive: vm.Vector4(0.03, 0.03, 0.04, 1))
-        ..baseColorTexture = tex.googleGlyphs[i]
-        ..emissiveTexture = tex.googleGlyphs[i];
-      _add(buf, m, 'google_letter_$i');
-      googleLetters.add(GlowProp(m, em, litScale: 1.0));
-    }
-
-    // Rooftop beacon target ring
-    final bcn = gt['rooftopBeacon'] as List<dynamic>;
-    beaconMat = pbr(hexColor('#EA4335', 0.6), emissive: hexColor('#EA4335', 2.4));
-    beaconRing = fs.Node(
-        name: 'rooftop_beacon',
-        mesh: fs.Mesh(
-            fs.TorusGeometry(radius: 5.5, tubeRadius: 0.16, radialSegments: 48),
-            beaconMat))
-      ..position = w3((bcn[0] as num).toDouble(), 22.08, (bcn[2] as num).toDouble());
-    root.add(beaconRing);
-  }
 }

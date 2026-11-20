@@ -6,8 +6,9 @@ import 'package:vector_math/vector_math.dart' as vm;
 import 'game_state.dart';
 import 'hero_sim.dart';
 import 'level_data.dart';
-import 'mesh_buf.dart';
+import 'glb_library.dart';
 import 'pegman_builder.dart';
+import 'pegman_glb.dart';
 import 'route_spline.dart';
 import 'sound_fx.dart';
 import 'world_builder.dart';
@@ -30,7 +31,8 @@ class ShibuyaSceneController {
   late final ShibuyaLevel level;
   late final HeroSim sim;
   late final ShibuyaWorld world;
-  final PegmanRig pegman = PegmanRig();
+  late final GlbPegman pegman;
+  late final GlbLibrary glb;
   final List<fs.Node> _taxiNodes = [];
   final List<fs.Node> _driftNodes = [];
   final List<fs.Node> _rain = [];
@@ -60,13 +62,16 @@ class ShibuyaSceneController {
     sim = HeroSim(level, state);
     state.setLoading(0.32, 'Lighting Shibuya night sky...');
     _configureLighting();
-    state.setLoading(0.44, 'Loading Shibuya skyline...');
+    int loaded = 0;
+    glb = await GlbLibrary.load(
+        onProgress: (l) => state.setLoading(0.32 + 0.06 * ++loaded, l));
+    state.setLoading(0.66, 'Preparing Shibuya Crossing...');
     final tex = await WorldTextures.create(level);
-    state.setLoading(0.62, 'Building Shibuya streets...');
-    world = ShibuyaWorld(level, sim.spline, tex)..build();
+    state.setLoading(0.74, 'Building Shibuya streets...');
+    world = ShibuyaWorld(level, sim.spline, tex, glb)..build();
     scene.add(world.root);
-    state.setLoading(0.76, 'Loading Pegman...');
-    pegman.attach(scene.root);
+    state.setLoading(0.8, 'Preparing Pegman...');
+    pegman = GlbPegman(glb)..attach(world.refRoot);
     state.setLoading(0.86, 'Loading Tokyo street fleet...');
     _buildTraffic();
     _buildRain();
@@ -107,58 +112,19 @@ class ShibuyaSceneController {
       ..scatter = 0.65;
   }
 
-  fs.Node _car(String type, double w, double h, double l, String glow) {
-    final body = MeshBuf();
-    final cabin = MeshBuf();
-    final lights = MeshBuf();
-    final tails = MeshBuf();
-    body.box(vm.Vector3(0, 0.25 + h * 0.22, 0), vm.Vector3(w, h * 0.45, l), 0);
-    cabin.box(vm.Vector3(0, 0.25 + h * 0.62, -l * 0.05),
-        vm.Vector3(w * 0.86, h * 0.36, l * 0.5), 0);
-    for (final sd in [-1.0, 1.0]) {
-      lights.box(vm.Vector3(sd * w * 0.32, 0.25 + h * 0.28, l / 2),
-          vm.Vector3(w * 0.22, 0.12, 0.05), 0);
-      tails.box(vm.Vector3(sd * w * 0.32, 0.25 + h * 0.3, -l / 2),
-          vm.Vector3(w * 0.24, 0.1, 0.05), 0);
-    }
-    final under = MeshBuf()
-      ..box(vm.Vector3(0, 0.08, 0), vm.Vector3(w * 0.9, 0.04, l * 0.9), 0);
-    const colors = <String, String>{
-      'CrownComfortTaxi': '#1F2937',
-      'DriftWidebodyOrange': '#F97316',
-      'GtrMidnightBlue': '#1E3A8A',
-      'PandaHatch86': '#E5E7EB',
-      'TunerPearlSilver': '#CBD5E1',
-    };
-    final root = fs.Node(name: type);
-    root.add(fs.Node(
-        mesh: fs.Mesh(body.build(),
-            pbr(hexColor(colors[type] ?? '#1F2937'), metallic: 0.6, roughness: 0.3))));
-    root.add(fs.Node(
-        mesh: fs.Mesh(cabin.build(),
-            pbr(hexColor('#0F172A'), metallic: 0.8, roughness: 0.15, emissive: hexColor('#1E3A5F', 0.4)))));
-    root.add(fs.Node(
-        mesh: fs.Mesh(lights.build(), pbr(hexColor('#FFFFFF'), emissive: hexColor('#FFF3D6', 3.0)))));
-    root.add(fs.Node(
-        mesh: fs.Mesh(tails.build(), pbr(hexColor('#EF4444'), emissive: hexColor('#EF4444', 3.0)))));
-    root.add(fs.Node(
-        mesh: fs.Mesh(under.build(), pbr(hexColor(glow), emissive: hexColor(glow, 2.6)))));
-    if (type == 'CrownComfortTaxi') {
-      final sign = MeshBuf()
-        ..box(vm.Vector3(0, 0.25 + h * 0.86, 0), vm.Vector3(0.5, 0.2, 0.3), 0);
-      root.add(fs.Node(
-          mesh: fs.Mesh(sign.build(), pbr(hexColor('#FBBC05'), emissive: hexColor('#FBBC05', 2.2)))));
-    }
-    scene.add(root);
-    return root;
+  fs.Node _car(String type) {
+    final t = GlbLibrary.template(glb.fleet, type) ??
+        GlbLibrary.template(glb.fleet, 'CrownComfortTaxi')!;
+    world.refRoot.add(t);
+    return t;
   }
 
   void _buildTraffic() {
     for (final t in sim.taxis) {
-      _taxiNodes.add(_car(t.type, t.width, t.height, t.length, '#FF4F00'));
+      _taxiNodes.add(_car(t.type));
     }
     for (final c in sim.drift) {
-      _driftNodes.add(_car(c.type, 1.9, 1.35, 4.5, c.underglow));
+      _driftNodes.add(_car(c.type));
     }
   }
 
@@ -190,7 +156,7 @@ class ShibuyaSceneController {
       p.setLit(false);
     }
     for (final l in world.googleLetters) {
-      l.material.emissiveFactor = vm.Vector4(0.02, 0.02, 0.03, 1);
+      l.material.emissiveFactor = l.baseEmissive * 0.04;
     }
   }
 
@@ -252,16 +218,16 @@ class ShibuyaSceneController {
       final lit = sim.portalDone[i];
       if (world.slidePortals[i].lit != lit) world.slidePortals[i].setLit(lit);
     }
-    for (int i = 0; i < 6; i++) {
-      final l = world.googleLetters[i];
-      if (state.googleLettersLit[i]) {
+    for (final l in world.googleLetters) {
+      final i = l.letterIndex;
+      if (i >= 0 && state.googleLettersLit[i]) {
         final k = 0.85 + 0.15 * math.sin(_time * 5 + i);
         l.material.emissiveFactor = vm.Vector4(
             l.baseEmissive.x * k, l.baseEmissive.y * k, l.baseEmissive.z * k, 1);
       }
     }
     final pulse = 1.6 + 1.2 * (0.5 + 0.5 * math.sin(_time * 3.2));
-    world.beaconMat.emissiveFactor = hexColor('#EA4335', pulse);
+    world.beaconMat?.emissiveFactor = hexColor('#FBBC05', pulse);
     for (final s in world.bladeSigns) {
       s.setLit(true, 0.82 + 0.18 * math.sin(_time * 2.4 + s.baseEmissive.x * 3));
     }
@@ -269,14 +235,12 @@ class ShibuyaSceneController {
       final t = sim.taxis[i];
       final n = _taxiNodes[i];
       n.visible = t.active;
-      n.position = w3(t.x, t.y, t.z);
-      n.rotation = yawQuat(mirrorYaw(t.yaw));
+      n.localTransform = GlbLibrary.slot(t.x, t.y, t.z, t.yaw);
     }
     for (int i = 0; i < sim.drift.length; i++) {
       final c = sim.drift[i];
       final n = _driftNodes[i];
-      n.position = w3(c.x, 0, c.z);
-      n.rotation = yawQuat(mirrorYaw(c.yaw));
+      n.localTransform = GlbLibrary.slot(c.x, 0, c.z, c.yaw);
     }
   }
 
@@ -305,18 +269,15 @@ class ShibuyaSceneController {
     final visible =
         state.phase != AppPhase.mapsTitle && state.phase != AppPhase.loading;
     pegman.root.visible = visible;
-    pegman.update(
+    pegman.placeRoot(sim.x, sim.y, sim.z, sim.yaw);
+    pegman.updateFk(
       dt: state.photoMode ? 0 : dt,
-      position: w3(sim.x, sim.y, sim.z),
-      yaw: mirrorYaw(sim.yaw),
       pose: pose,
       speed: sim.speed,
       flipPhase: sim.flipPhase,
-      bank: -sim.bank,
+      flipStyle: sim.flipStyle,
+      bank: sim.bank,
       time: _time,
-      showTrail: visible &&
-          state.phase == AppPhase.playing &&
-          state.overchargeRatio > 0.3,
     );
   }
 
