@@ -29,8 +29,10 @@ class NeonSign {
     final litF = ((glow - 0.14) / 0.48).clamp(0.0, 1.0);
     final f = 0.95 + 0.05 * math.sin(time * 7 + index * 2.1);
     // lit glyph = mix(neon, white, 0.4) * (1.2 + 1.4 glow); dormant ≈ 0.06.
-    final k = (1.2 + 1.4 * glow) * f;
-    final lr = (neon.x * 0.6 + 0.4) * k, lg = (neon.y * 0.6 + 0.4) * k, lb = (neon.z * 0.6 + 0.4) * k;
+    final k = (1.2 + 1.4 * glow) * f * 0.6;
+    final lr = (neon.x * 0.75 + 0.25 * neon.x.clamp(0.0, 1.0)) * k,
+        lg = (neon.y * 0.75 + 0.25 * neon.y.clamp(0.0, 1.0)) * k,
+        lb = (neon.z * 0.75 + 0.25 * neon.z.clamp(0.0, 1.0)) * k;
     const d = [0.055, 0.081, 0.133];
     material.emissiveFactor = vm.Vector4(d[0] + (lr - d[0]) * litF,
         d[1] + (lg - d[1]) * litF, d[2] + (lb - d[2]) * litF, 1);
@@ -75,10 +77,9 @@ class GlbWorld {
     String textFor(dynamic t, int i) =>
         _signTexts.contains(t) ? t as String : _signTexts[i % _signTexts.length];
     fs.PhysicallyBasedMaterial signMat(fs.Texture2D tex) => fs.PhysicallyBasedMaterial(
-          baseColorTexture: tex,
           emissiveTexture: tex,
         )
-          ..baseColorFactor = vm.Vector4(0.35, 0.35, 0.4, 1)
+          ..baseColorFactor = vm.Vector4(0.032, 0.048, 0.088, 1)
           ..roughnessFactor = 0.3
           ..metallicFactor = 0.1
           ..doubleSided = true;

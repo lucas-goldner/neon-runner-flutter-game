@@ -6,6 +6,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 import 'glb_library.dart';
 import 'level_data.dart';
 import 'mesh_buf.dart';
+import 'osm_city.dart';
 import 'route_spline.dart';
 import 'world_glb.dart';
 import 'world_textures.dart';
@@ -93,7 +94,6 @@ class ShibuyaWorld {
   void build() {
     root.add(refRoot);
     _ground();
-    _buildings();
     _routeDeck();
     _yamanote();
     _grindRails();
@@ -101,6 +101,13 @@ class ShibuyaWorld {
     _barriers();
     _distantSkyline();
     glbWorld = GlbWorld(this, glb)..build();
+  }
+
+  /// Builds the OSM city (async: paints the facade textures).
+  Future<void> buildCity() async {
+    final city = OsmCity(this);
+    await city.build();
+    _footprintBoxes.addAll(city.bounds);
   }
 
   /// Rough footprint test (axis-aligned boxes of the OSM buildings).
@@ -289,129 +296,11 @@ class ShibuyaWorld {
         'ScrambleCrosswalksSAT');
   }
 
-  // ------------------------------------------------------------- buildings
-  void _buildings() {
-    final walls = MeshBuf();
-    final brick = MeshBuf();
-    final glass = MeshBuf();
-    final roofs = MeshBuf();
-    final known = <String>{};
-    final pick = math.Random(1335178864);
-    for (final bd in level.buildings) {
-      final fp = ShibuyaLevel.pts(bd['footprint']);
-      known.add('${fp.first.x.toStringAsFixed(1)},${fp.first.z.toStringAsFixed(1)}');
-      if (bd['isGoogleHero'] == true || bd['replacedByHeroArch'] == true) continue;
-      _footprintBoxes.add([
-        fp.map((q) => q.x).reduce(math.min),
-        fp.map((q) => q.x).reduce(math.max),
-        fp.map((q) => q.z).reduce(math.min),
-        fp.map((q) => q.z).reduce(math.max),
-      ]);
-      final h = (bd['height'] as num).toDouble();
-      final style = bd['archStyle'] as String? ?? 'urban_block';
-      final target = style == 'modern_glass_tower'
-          ? glass
-          : (style == 'urban_block' && pick.nextDouble() < 0.55 ? brick : walls);
-      _prism(target, roofs, fp, 0, h);
-      if (style != 'modern_glass_tower') _storefronts(fp);
-      known.add('${fp.first.x.toStringAsFixed(1)},${fp.first.z.toStringAsFixed(1)}');
-    }
-    // Remaining overview footprints (no OSM height): low/mid blocks.
-    final rng = math.Random(14598366);
-    for (final poly in level.overview['buildings'] as List<dynamic>) {
-      final fp = ShibuyaLevel.pts(poly);
-      if (fp.length < 3) continue;
-      final key = '${fp.first.x.toStringAsFixed(1)},${fp.first.z.toStringAsFixed(1)}';
-      if (known.contains(key)) continue;
-      double cx = 0, cz = 0;
-      for (final q in fp) {
-        cx += q.x;
-        cz += q.z;
-      }
-      cx /= fp.length;
-      cz /= fp.length;
-      // Keep the route corridor clear of guessed geometry.
-      if (_distToRoute(cx, cz) < 16) continue;
-      final h = 12.0 + rng.nextDouble() * 26.0;
-      _prism(rng.nextDouble() < 0.4 ? brick : walls, roofs, fp, 0, h);
-    }
-    _add(
-        walls,
-        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.7, metallic: 0.15)
-          ..baseColorTexture = tex.facadeBase
-          ..emissiveTexture = tex.facadeGlow
-          ..emissiveFactor = vm.Vector4(1.0, 1.0, 1.1, 1),
-        'osm_buildings');
-    _add(
-        brick,
-        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.85, metallic: 0.05)
-          ..baseColorTexture = tex.brickBase
-          ..emissiveTexture = tex.brickGlow
-          ..emissiveFactor = vm.Vector4(1.0, 0.95, 0.9, 1),
-        'osm_brick_buildings');
-    _flushStorefronts();
-    _add(
-        glass,
-        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.25, metallic: 0.55)
-          ..baseColorTexture = tex.glassBase
-          ..emissiveTexture = tex.glassGlow
-          ..emissiveFactor = vm.Vector4(1.3, 1.3, 1.45, 1),
-        'osm_glass_towers');
-    _add(roofs, pbr(hexColor('#1A2338'), emissive: hexColor('#0D1426'), roughness: 0.8),
-        'osm_roofs');
-  }
 
-  final MeshBuf _shops = MeshBuf();
 
   /// Warm ground-floor shopfront band on walls facing within 40 m of the route.
-  void _storefronts(List<XZ> fp) {
-    final pts = List<XZ>.from(fp);
-    double area = 0;
-    for (int i = 0, j = pts.length - 1; i < pts.length; j = i++) {
-      area += pts[j].x * pts[i].z - pts[i].x * pts[j].z;
-    }
-    final sign = area >= 0 ? 1.0 : -1.0;
-    for (int i = 0; i + 1 < pts.length; i++) {
-      final a = pts[i], b = pts[i + 1];
-      final dx = b.x - a.x, dz = b.z - a.z;
-      final len = math.sqrt(dx * dx + dz * dz);
-      if (len < 3) continue;
-      final mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
-      if (_distToRoute(mx, mz) > 40) continue;
-      final nx = dz / len * sign, nz = -dx / len * sign;
-      const off = 0.06;
-      final n = vm.Vector3(-nx, 0, nz);
-      _shops.quad(
-          w3(a.x + nx * off, 0.2, a.z + nz * off),
-          w3(b.x + nx * off, 0.2, b.z + nz * off),
-          w3(b.x + nx * off, 3.6, b.z + nz * off),
-          w3(a.x + nx * off, 3.6, a.z + nz * off),
-          n,
-          u0: 0,
-          u1: len / 7.0,
-          v0: 1,
-          v1: 0);
-    }
-  }
 
-  void _flushStorefronts() {
-    _add(
-        _shops,
-        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.3, metallic: 0.2)
-          ..baseColorTexture = tex.shopBase
-          ..emissiveTexture = tex.shopGlow
-          ..emissiveFactor = vm.Vector4(1.6, 1.4, 1.2, 1),
-        'storefronts');
-  }
 
-  double _distToRoute(double x, double z) {
-    double best = 1e9;
-    for (final w in spline.waypoints) {
-      final d = (w.x - x) * (w.x - x) + (w.z - z) * (w.z - z);
-      if (d < best) best = d;
-    }
-    return math.sqrt(best);
-  }
 
   /// Extrudes a footprint into walls (UV-tiled windows) and a flat roof.
   void _prism(MeshBuf walls, MeshBuf roofs, List<XZ> fp, double y0, double y1) {

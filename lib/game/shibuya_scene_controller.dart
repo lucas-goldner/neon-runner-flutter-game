@@ -68,7 +68,9 @@ class ShibuyaSceneController {
     state.setLoading(0.66, 'Preparing Shibuya Crossing...');
     final tex = await WorldTextures.create(level);
     state.setLoading(0.74, 'Building Shibuya streets...');
-    world = ShibuyaWorld(level, sim.spline, tex, glb)..build();
+    world = ShibuyaWorld(level, sim.spline, tex, glb);
+    await world.buildCity();
+    world.build();
     await world.glbWorld.buildSigns();
     scene.add(world.root);
     state.setLoading(0.8, 'Preparing Pegman...');
