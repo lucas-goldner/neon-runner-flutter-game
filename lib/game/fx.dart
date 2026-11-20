@@ -389,7 +389,8 @@ class NeonFx {
             d[o] = (_a.x + _b.x) * 0.5;
             d[o + 1] = (_a.y + _b.y) * 0.5;
             d[o + 2] = (_a.z + _b.z) * 0.5;
-            d[o + 3] = math.max(0.03, dist * 0.0022);
+            // LineSegments: ~1.5 device pixels wide at any distance.
+            d[o + 3] = math.max(0.004, dist * f.pixelSize * 1.6);
             d[o + 4] = len;
             d[o + 5] = 0;
             d[o + 6] = col.x * 1.6;
