@@ -88,14 +88,14 @@ class ShibuyaWorld {
   final List<GlowProp> slidePortals = [];
   final List<GlowProp> googleLetters = [];
   final List<GlowProp> bladeSigns = [];
+  /// One material per grind rail (index = route grindRails order).
+  final List<fs.PhysicallyBasedMaterial> railMats = [];
   fs.PhysicallyBasedMaterial? beaconMat;
   final List<List<double>> _footprintBoxes = [];
 
   void build() {
     root.add(refRoot);
     _ground();
-    _routeDeck();
-    _yamanote();
     _grindRails();
     _wallRuns();
     _barriers();
@@ -349,107 +349,10 @@ class ShibuyaWorld {
   }
 
 
-  // ------------------------------------------------- route deck & viaduct
-  void _routeDeck() {
-    final deck = MeshBuf();
-    final sides = MeshBuf();
-    final piers = MeshBuf();
-    final edge = MeshBuf();
-    final s = RouteSample();
-    double lastPier = -100;
-    for (double d = 0; d < spline.length; d += 2.0) {
-      final a = spline.sample(d, RouteSample());
-      spline.sample(math.min(spline.length, d + 2.0), s);
-      if (a.y < 0.25 && s.y < 0.25) continue;
-      final hwA = a.halfWidth, hwB = s.halfWidth;
-      vm.Vector3 pa(double lat, double dy) =>
-          w3(a.x + a.rx * lat, a.y + dy, a.z + a.rz * lat);
-      vm.Vector3 pb(double lat, double dy) =>
-          w3(s.x + s.rx * lat, s.y + dy, s.z + s.rz * lat);
-      final up = vm.Vector3(0, 1, 0);
-      deck.quad(pa(-hwA, 0), pa(hwA, 0), pb(hwB, 0), pb(-hwB, 0), up,
-          u0: 0, u1: 1, v0: d / 8, v1: (d + 2) / 8);
-      // deck slab sides
-      for (final side in [-1.0, 1.0]) {
-        final n = w3(a.rx * side, 0, a.rz * side);
-        sides.quad(pa(side * hwA, 0), pb(side * hwB, 0), pb(side * hwB, -1.4),
-            pa(side * hwA, -1.4), n);
-        // parapet neon edge strip
-        edge.quad(pa(side * (hwA - 0.1), 0.9), pb(side * (hwB - 0.1), 0.9),
-            pb(side * (hwB - 0.1), 1.05), pa(side * (hwA - 0.1), 1.05), n);
-        sides.quad(pa(side * hwA, 0), pb(side * hwB, 0), pb(side * hwB, 0.9),
-            pa(side * hwA, 0.9), n);
-      }
-      if (d - lastPier >= 12 && a.y > 2.0) {
-        lastPier = d;
-        for (final side in [-1.0, 1.0]) {
-          final lat = side * (hwA - 1.2);
-          piers.box(w3(a.x + a.rx * lat, a.y * 0.5 - 0.7, a.z + a.rz * lat),
-              vm.Vector3(1.1, a.y - 1.4, 1.1), mirrorYaw(a.yaw));
-        }
-      }
-    }
-    _add(deck, pbr(hexColor('#2A3446'), emissive: hexColor('#141B28'), roughness: 0.5, metallic: 0.2),
-        'viaduct_deck');
-    _add(sides, pbr(hexColor('#1C2434'), emissive: hexColor('#0E1420'), roughness: 0.6), 'viaduct_sides');
-    _add(piers, pbr(hexColor('#232C3D'), emissive: hexColor('#0E1420'), roughness: 0.7), 'viaduct_piers');
-    _add(edge, pbr(hexColor('#38BDF8', 0.5), emissive: hexColor('#38BDF8', 1.6)), 'viaduct_edge');
 
-    // Lane dashes along the whole route.
-    final dashes = MeshBuf();
-    for (double d = 4; d < spline.length - 4; d += 9) {
-      final a = spline.sample(d, RouteSample());
-      if (a.y < 0.25) continue; // ground markings come from _sidewalksAndMarkings
-      for (final lat in [-1.8, 1.8]) {
-        final x = a.x + a.rx * lat, z = a.z + a.rz * lat;
-        dashes.box(w3(x, a.y + 0.03, z), vm.Vector3(0.14, 0.02, 3.0),
-            mirrorYaw(a.yaw));
-      }
-    }
-    _add(dashes, unlit(vm.Vector4(0.55, 0.62, 0.75, 1)), 'lane_dashes');
-  }
-
-  // -------------------------------------------------------- Yamanote line
-  void _yamanote() {
-    final tracks = level.meta['yamanoteTracks'] as Map<String, dynamic>;
-    final rails = MeshBuf();
-    final deck = MeshBuf();
-    for (final key in ['outer', 'inner']) {
-      final pts = [
-        for (final p in tracks[key] as List<dynamic>)
-          vm.Vector3((p[0] as num).toDouble(), (p[1] as num).toDouble(),
-              (p[2] as num).toDouble()),
-      ];
-      for (int i = 0; i + 1 < pts.length; i++) {
-        final a = pts[i], b = pts[i + 1];
-        final dx = b.x - a.x, dz = b.z - a.z;
-        final len = math.sqrt(dx * dx + dz * dz);
-        final rx = -dz / len, rz = dx / len;
-        for (final g in [-0.72, 0.72]) {
-          rails.quad(
-              w3(a.x + rx * (g - 0.06), a.y + 0.25, a.z + rz * (g - 0.06)),
-              w3(b.x + rx * (g - 0.06), b.y + 0.25, b.z + rz * (g - 0.06)),
-              w3(b.x + rx * (g + 0.06), b.y + 0.25, b.z + rz * (g + 0.06)),
-              w3(a.x + rx * (g + 0.06), a.y + 0.25, a.z + rz * (g + 0.06)),
-              vm.Vector3(0, 1, 0));
-        }
-        deck.quad(
-            w3(a.x - rx * 2.4, a.y, a.z - rz * 2.4),
-            w3(b.x - rx * 2.4, b.y, b.z - rz * 2.4),
-            w3(b.x + rx * 2.4, b.y, b.z + rz * 2.4),
-            w3(a.x + rx * 2.4, a.y, a.z + rz * 2.4),
-            vm.Vector3(0, 1, 0));
-      }
-    }
-    _add(deck, pbr(hexColor('#1F2737'), emissive: hexColor('#10161F')), 'yamanote_deck');
-    _add(rails, pbr(hexColor('#34A853', 0.5), emissive: hexColor('#34A853', 1.8)),
-        'yamanote_rails');
-  }
 
   // ------------------------------------------------------------ grind rails
   void _grindRails() {
-    final rails = MeshBuf();
-    final hero = MeshBuf();
     final posts = MeshBuf();
     for (final r in level.route['grindRails'] as List<dynamic>) {
       final pts = [
@@ -459,7 +362,13 @@ class ShibuyaWorld {
       ];
       final isHero = r['heroRailLaunch'] == true;
       final radius = isHero ? 0.14 : 0.105;
-      _tube(isHero ? hero : rails, pts, radius);
+      final rb = MeshBuf();
+      _tube(rb, pts, radius * 1.06);
+      final rm = pbr(isHero ? hexColor('#38BDF8') : hexColor('#2E405E'),
+          emissive: isHero ? hexColor('#38BDF8', 1.55) : hexColor('#FF4F00', 0.72),
+          metallic: 0.72, roughness: 0.18);
+      railMats.add(rm);
+      _add(rb, rm, 'GrindRail_${r['id']}');
       for (final p in (r['posts'] as List<dynamic>? ?? const [])) {
         final x = (p['x'] as num).toDouble(), z = (p['z'] as num).toDouble();
         final yb = (p['yBase'] as num?)?.toDouble() ?? 0;
@@ -475,11 +384,7 @@ class ShibuyaWorld {
         }
       }
     }
-    _add(rails, pbr(hexColor('#FF4F00', 0.6), emissive: hexColor('#FF6A1F', 3.2), metallic: 0.6, roughness: 0.25),
-        'grind_rails');
-    _add(hero, pbr(hexColor('#4285F4', 0.6), emissive: hexColor('#7BAAF7', 3.2), metallic: 0.6, roughness: 0.25),
-        'hero_rail');
-    _add(posts, pbr(hexColor('#2E3747'), emissive: hexColor('#121822'), metallic: 0.5, roughness: 0.4),
+    _add(posts, pbr(hexColor('#334155'), metallic: 0.78, roughness: 0.42),
         'rail_posts');
   }
 
@@ -531,33 +436,54 @@ class ShibuyaWorld {
 
   // ------------------------------------------------------------- wall runs
   void _wallRuns() {
+    // _buildWallRunsAndTransferArcs: 0.18 m chevron panels (Lg texture),
+    // centre at y + h*0.46, height h*0.78, plus support pylons.
     final panels = MeshBuf();
-    final frame = MeshBuf();
+    final pylons = MeshBuf();
     for (final wr in level.route['wallRuns'] as List<dynamic>) {
-      final pts = ShibuyaLevel.pts([
-        for (final p in wr['points'] as List<dynamic>) [p[0], p[2]],
-      ]);
-      final y = ((wr['points'] as List<dynamic>).first[1] as num).toDouble();
-      final h = (wr['height'] as num?)?.toDouble() ?? 4.6;
-      final nrm = wr['normal'] as List<dynamic>;
-      final n = vm.Vector3((nrm[0] as num).toDouble(), 0, -(nrm[2] as num).toDouble());
-      for (int i = 0; i + 1 < pts.length; i++) {
-        final a = pts[i], b = pts[i + 1];
-        panels.quad(w3(a.x, y - h / 2 + 0.3, a.z), w3(b.x, y - h / 2 + 0.3, b.z),
-            w3(b.x, y + h / 2, b.z), w3(a.x, y + h / 2, a.z), n);
-        frame.quad(w3(a.x, y + h / 2, a.z), w3(b.x, y + h / 2, b.z),
-            w3(b.x, y + h / 2 + 0.18, b.z), w3(a.x, y + h / 2 + 0.18, a.z), n);
-        frame.quad(w3(a.x, y - h / 2 + 0.12, a.z), w3(b.x, y - h / 2 + 0.12, b.z),
-            w3(b.x, y - h / 2 + 0.3, b.z), w3(a.x, y - h / 2 + 0.3, a.z), n);
+      final a = wr['points'] as List<dynamic>;
+      final sH = (wr['height'] as num?)?.toDouble() ?? 5.4;
+      for (int e = 0; e + 1 < a.length; e++) {
+        final t = a[e], n = a[e + 1];
+        double v(dynamic x) => (x as num).toDouble();
+        final ix = v(n[0]) - v(t[0]), cz = v(n[2]) - v(t[2]);
+        final l = math.sqrt(ix * ix + cz * cz);
+        if (l < 0.2) continue;
+        final u = math.atan2(ix, cz);
+        final dx = (v(t[0]) + v(n[0])) * 0.5, fy = (v(t[1]) + v(n[1])) * 0.5 + sH * 0.46;
+        final pz = (v(t[2]) + v(n[2])) * 0.5;
+        // two big faces with u running along the wall (repeat every 10 m)
+        final hw = 0.09, hh = sH * 0.39, hl = (l + 0.15) / 2;
+        final ca = math.cos(u), sa = math.sin(u);
+        vm.Vector3 p(double lx, double ly, double lz) =>
+            vm.Vector3(dx + lx * ca + lz * sa, fy + ly, pz - lx * sa + lz * ca);
+        for (final sd in [-1.0, 1.0]) {
+          final nrm = vm.Vector3(sd * ca, 0, -sd * sa);
+          panels.quad(p(sd * hw, -hh, -hl), p(sd * hw, -hh, hl), p(sd * hw, hh, hl), p(sd * hw, hh, -hl),
+              nrm, u0: 0, u1: l / 10, v0: 1, v1: 0);
+        }
+        if (e % 2 == 0 || e == a.length - 2) {
+          final base = v(t[1]) > 5 ? 7.5 : 0.0;
+          final h = math.max(1.0, v(t[1]) + sH * 0.85 - base);
+          pylons.box(vm.Vector3(v(t[0]), base + h * 0.5, v(t[2])), vm.Vector3(0.32, h, 0.32), 0);
+        }
       }
     }
-    final glass = pbr(hexColor('#38BDF8', 0.35, 0.55),
-        emissive: hexColor('#38BDF8', 0.9), roughness: 0.15)
-      ..alphaMode = fs.AlphaMode.blend;
-    _add(panels, glass, 'wall_run_panels');
-    _add(frame, pbr(hexColor('#38BDF8', 0.5), emissive: hexColor('#7DD3FC', 3.0)),
-        'wall_run_frames');
+    final m = fs.PhysicallyBasedMaterial(baseColorTexture: tex.wallRun, emissiveTexture: tex.wallRun)
+      ..baseColorFactor = hexColor('#0F1C32', 1, 0.84)
+      ..emissiveFactor = hexColor('#38BDF8', 0.95 * 1.6)
+      ..roughnessFactor = 0.14
+      ..metallicFactor = 0.35
+      ..alphaMode = fs.AlphaMode.blend
+      ..doubleSided = true;
+    if (!panels.isEmpty) refRoot.add(fs.Node(name: 'WallRunPanelsMerged', mesh: fs.Mesh(panels.build(), m)));
+    if (!pylons.isEmpty) {
+      refRoot.add(fs.Node(
+          name: 'WallRunSupportPylons',
+          mesh: fs.Mesh(pylons.build(), pbr(hexColor('#1C2536'), roughness: 0.5, metallic: 0.72))));
+    }
   }
+
 
 
   // ------------------------------------- DistantTokyoSkyline360 (demo)

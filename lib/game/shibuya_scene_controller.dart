@@ -330,6 +330,14 @@ class ShibuyaSceneController {
 
   void _syncProps() {
     _syncMapsMorph();
+    for (int i = 0; i < world.railMats.length && i < sim.rails.length; i++) {
+      final hero = sim.rails[i].isHero;
+      final active = sim.activeRail == i;
+      // #FF4F00 x4.8 desaturates to pale peach under the demo's AgX grade.
+      world.railMats[i].emissiveFactor = active
+          ? hexColor('#FFA27A', 3.4)
+          : (hero ? hexColor('#38BDF8', 1.55) : hexColor('#FF4F00', 0.72));
+    }
     for (int i = 0; i < world.rings.length; i++) {
       world.rings[i].node.visible = !sim.ringHit[i];
     }

@@ -63,10 +63,7 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     // `?sim=N` runs N simulation substeps per frame (debug fast-forward).
     final sub = int.tryParse(_q['sim'] ?? '') ?? 1;
     // `&freeze=1` holds the frame right after a seek (debug captures).
-    if (_q['freeze'] == '1' && _seekDone) {
-      _controller.tick(0.0001);
-      return;
-    }
+    if (_q['freeze'] == '1' && _seekDone) return;
     for (int i = 0; i < sub; i++) {
       _controller.tick(dt);
     }
@@ -90,8 +87,14 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     if (seekm != null && !_seekDone && _state.phase == AppPhase.playing) {
       _seekDone = true;
       if (!_state.autoPilot) _state.toggleAutoPilot();
-      for (int i = 0; i < 5400 && _controller.sim.s < seekm && _state.phase == AppPhase.playing; i++) {
-        _controller.tick(1 / 60);
+      try {
+        int i = 0;
+        for (; i < 5400 && _controller.sim.s < seekm && _state.phase == AppPhase.playing; i++) {
+          _controller.tick(1 / 60);
+        }
+        debugPrint('seekm: $i steps -> s=${_controller.sim.s.toStringAsFixed(1)}');
+      } catch (e, st) {
+        debugPrint('seekm failed: $e\n$st');
       }
     }
     final photo = _q['photo'];

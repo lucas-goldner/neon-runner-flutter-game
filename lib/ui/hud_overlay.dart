@@ -87,9 +87,9 @@ class HudOverlay extends StatelessWidget {
         if (!photo && !finale && state.streetPill != null)
           Positioned(
             right: 20,
-            bottom: compact ? 190 : 208,
+            bottom: narrow ? 190 : 208,
             child: IgnorePointer(
-                child: StreetEntryPill(pill: state.streetPill!, compact: compact)),
+                child: StreetEntryPill(pill: state.streetPill!, compact: narrow)),
           ),
 
         if (!photo && state.onboardingVisible && !finale)

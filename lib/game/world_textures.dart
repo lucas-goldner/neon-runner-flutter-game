@@ -18,6 +18,7 @@ class WorldTextures {
   late final fs.Texture2D shopBase;
   late final fs.Texture2D shopGlow;
   late final fs.Texture2D ground;
+  late final fs.Texture2D wallRun;
   final List<fs.Texture2D> googleGlyphs = [];
 
   static Future<WorldTextures> create(ShibuyaLevel level) async {
@@ -35,6 +36,7 @@ class WorldTextures {
     t.shopBase = await fs.Texture2D.fromImage(sh.$1);
     t.shopGlow = await fs.Texture2D.fromImage(sh.$2);
     t.ground = await fs.Texture2D.fromImage(await _ground(level));
+    t.wallRun = await fs.Texture2D.fromImage(await _wallRunTex());
     for (final ch in ['G', 'o', 'o', 'g', 'l', 'e']) {
       t.googleGlyphs.add(await fs.Texture2D.fromImage(await _glyph(ch)));
     }
@@ -226,6 +228,34 @@ class WorldTextures {
     )..layout();
     tp.paint(c, Offset((w - tp.width) / 2, (h - tp.height) / 2 - 8));
     return rec.endRecording().toImage(w, h);
+  }
+
+  /// Port of the demo's `Lg()` wall-run panel texture (chevrons).
+  static Future<ui.Image> _wallRunTex() async {
+    final rec = ui.PictureRecorder();
+    final r = Canvas(rec);
+    r.drawRect(const Rect.fromLTWH(0, 0, 512, 256), Paint()..color = const Color(0xFF09111E));
+    final line = Paint()
+      ..color = const Color(0x4038BDF8)
+      ..strokeWidth = 3;
+    for (double y = 24; y < 256; y += 32) {
+      r.drawLine(Offset(0, y), Offset(512, y), line);
+    }
+    for (int e = 0; e < 4; e++) {
+      final t = 74.0 + e * 124;
+      r.drawPath(
+          Path()
+            ..moveTo(t - 28, 56)
+            ..lineTo(t + 28, 128)
+            ..lineTo(t - 28, 200),
+          Paint()
+            ..color = e.isEven ? const Color(0xFFFF4F00) : const Color(0xFF38BDF8)
+            ..style = PaintingStyle.stroke
+            ..strokeWidth = 14
+            ..strokeCap = StrokeCap.round
+            ..strokeJoin = StrokeJoin.round);
+    }
+    return rec.endRecording().toImage(512, 256);
   }
 
   /// Ground-floor shopfront band: big warm-lit panes between dark mullions.

@@ -255,6 +255,8 @@ class HeroSim {
     transferDone = List.filled(transfers.length, false);
     nearMisses = 0;
     stumbles = 0;
+    _bldgSignLit.clear();
+    _corridorSigns = 0;
     taxis
       ..clear()
       ..addAll([
@@ -333,6 +335,7 @@ class HeroSim {
     _checkRings();
     _checkNearMiss();
     _checkGates();
+    _checkBuildingSigns();
     _checkGoogle(dt);
     _syncState(dt);
   }
@@ -1018,6 +1021,29 @@ class HeroSim {
     }
   }
 
+  final Set<int> _bldgSignLit = {};
+  int _corridorSigns = 0;
+
+  /// Second half of `_checkPinGatesAndSigns`: up to 3 OSM building signs
+  /// within 38 m ignite (150 pts × combo) once voltage ≥ 2.2 kV.
+  void _checkBuildingSigns() {
+    if (voltage < 2.2 || _corridorSigns >= 3) return;
+    final b = level.buildings;
+    for (int t = 0; t < b.length; t++) {
+      if (_bldgSignLit.contains(t)) continue;
+      final n = b[t];
+      if (n['isGoogleHero'] == true) continue;
+      final c = n['center'] as List<dynamic>;
+      final dx = (c[0] as num).toDouble() - x, dz = (c[1] as num).toDouble() - z;
+      if (dx * dx + dz * dz <= 1444) {
+        _bldgSignLit.add(t);
+        _corridorSigns++;
+        state.award(150);
+        break;
+      }
+    }
+  }
+
   void _checkGoogle(double dt) {
     final h = level.route['heroGoogleLaunch'] as Map<String, dynamic>;
     final n = (h['igniteStartS'] as num).toDouble();
@@ -1277,7 +1303,7 @@ class HeroSim {
     }
     if (portal != null && portalD >= -2 && portalD <= 19.5) {
       out.jump = false;
-      out.slide = portalD <= 6;
+      out.slide = true;
     }
     if (!out.jump) {
       // dodge blocked lanes (barriers / taxis ahead)
