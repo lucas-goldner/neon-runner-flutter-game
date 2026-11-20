@@ -235,6 +235,7 @@ class HeroSim {
   final RouteSample _tmp = RouteSample();
 
   void reset() {
+    _deflectUntil = -1;
     s = 0;
     prevS = 0;
     lateral = 0;
@@ -483,6 +484,7 @@ class HeroSim {
   }
 
   double _dropVy = 0;
+  double _deflectUntil = -1;
 
   void _stepSkyDrop(double dt) {
     if (dropClock <= 0) _emit('mapsExtrude');
@@ -1109,6 +1111,7 @@ class HeroSim {
         trauma = math.max(trauma, 0.3);
         state.showCallout('HOOD BOUNCE', accent: CalloutAccent.danger);
         _emit('carDeflect', py: y + 0.45, value: 1);
+        _deflectUntil = elapsed + math.max(hitStop, 0.036);
       }
     }
     // Boost rings: duck under / hop over the solid ring rim
@@ -1404,12 +1407,18 @@ class HeroSim {
         break;
       }
     }
+    // _deflectBadgeMove: "BOUNCE" for max(hitStop, .036) s after a hood bounce.
+    if (elapsed <= _deflectUntil &&
+        (move == SimMove.stumble || move == SimMove.sprint || move == SimMove.vault)) {
+      state.move = ParkourMove.hoodBounce;
+      return;
+    }
     state.move = switch (move) {
       SimMove.skyDrop => ParkourMove.skyDrop,
       SimMove.sprint => ParkourMove.sprint,
-      SimMove.vault => flipStyle == 'front'
-          ? ParkourMove.airFlip
-          : (flipStyle == 'corkscrew' ? ParkourMove.railGrind : ParkourMove.jump),
+      // The demo labels hero.move directly: VAULT is always "JUMP" (also
+      // mid-flip and mid-transfer).
+      SimMove.vault => ParkourMove.jump,
       SimMove.slide => ParkourMove.slide,
       SimMove.railGrind => ParkourMove.railGrind,
       SimMove.wallRun => ParkourMove.wallRun,
