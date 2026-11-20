@@ -105,6 +105,7 @@ class ShibuyaWorld {
     _ground();
     _grindRails();
     _wallRuns();
+    _river();
     _barriers();
     _distantSkyline();
     glbWorld = GlbWorld(this, glb)..build();
@@ -512,6 +513,44 @@ class ShibuyaWorld {
   }
 
 
+
+  // ------------------------------------------- ShibuyaRiverWater (demo)
+  /// `_buildShibuyaRiverCanal`: 12 m glossy water panels along the OSM river
+  /// way (#07182F, emissive #0C284D x.34, roughness .08, metalness .28) plus
+  /// .65 x .42 m curbs on both banks.
+  final List<fs.PhysicallyBasedMaterial> riverMats = [];
+  void _river() {
+    final r = level.meta['shibuyaRiver'] as Map<String, dynamic>?;
+    final pts = (r?['points'] as List<dynamic>?) ?? const [];
+    if (pts.length < 2) return;
+    final n = ((r!['width'] as num?)?.toDouble() ?? 12) * 0.5;
+    final water = MeshBuf();
+    final curbs = MeshBuf();
+    for (int e = 0; e + 1 < pts.length; e++) {
+      double v(dynamic x) => (x as num).toDouble();
+      final a = pts[e] as List<dynamic>, o = pts[e + 1] as List<dynamic>;
+      final dx = v(o[0]) - v(a[0]), dz = v(o[1]) - v(a[1]);
+      final l = math.sqrt(dx * dx + dz * dz);
+      if (l < 1) continue;
+      final u = math.atan2(dx, dz);
+      final cx = (v(a[0]) + v(o[0])) * 0.5, cz = (v(a[1]) + v(o[1])) * 0.5;
+      final ca = math.cos(u), sa = math.sin(u);
+      final hl = (l + 2) / 2;
+      vm.Vector3 p(double lx, double lz) => vm.Vector3(cx + lx * ca + lz * sa, 0.014, cz - lx * sa + lz * ca);
+      water.quad(p(-n, -hl), p(n, -hl), p(n, hl), p(-n, hl), vm.Vector3(0, 1, 0),
+          u0: 0, v0: 0, u1: n * 2 / 6, v1: (l + 2) / 6);
+      for (final sd in [-1.0, 1.0]) {
+        final off = sd * (n + 0.35);
+        curbs.box(vm.Vector3(cx + off * ca, 0.21, cz - off * sa), vm.Vector3(0.65, 0.42, l + 1.2), u);
+      }
+    }
+    final m = pbr(hexColor('#07182F'), emissive: hexColor('#0C284D', 0.34), metallic: 0.28, roughness: 0.08);
+    riverMats.add(m);
+    refRoot.add(fs.Node(name: 'ShibuyaRiverWater', mesh: fs.Mesh(water.build(), m)));
+    refRoot.add(fs.Node(
+        name: 'ShibuyaRiverCurbs',
+        mesh: fs.Mesh(curbs.build(), pbr(hexColor('#243045'), roughness: 0.72, metallic: 0.3))));
+  }
 
   // ------------------------------------- DistantTokyoSkyline360 (demo)
   void _distantSkyline() {

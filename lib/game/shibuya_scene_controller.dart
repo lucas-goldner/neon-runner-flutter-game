@@ -151,10 +151,11 @@ class ShibuyaSceneController {
     // The demo's bloom is a 3 px, 13-tap soft-knee blur (strength 0.18):
     // practically no halo, so the engine's wide bloom stays off.
     scene.postProcess.bloom.enabled = false;
-    // Rain-slick tarmac: screen-space reflections of the neon in the
-    // puddles (the demo shades this in its custom wet-asphalt shader).
     scene.screenSpaceReflections
-      ..enabled = true
+      // The demo has no SSR (its wet sheen is the moon's GGX lobe, matched
+      // via the asphalt roughness); off by default for fidelity and mobile
+      // performance, `?ssr=1` to experiment.
+      ..enabled = Uri.base.queryParameters['ssr'] == '1'
       ..intensity = 0.7
       ..maxDistance = 60
       ..resolutionScale = 0.5
