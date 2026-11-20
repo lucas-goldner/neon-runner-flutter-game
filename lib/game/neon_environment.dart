@@ -107,9 +107,10 @@ class NeonEnvironment {
     final co = List.generate(9, (_) => vm.Vector3.zero());
     const numPhi = 128, numTheta = 64;
     final cell = 2 * math.pi * math.pi / (numPhi * numTheta);
-    // HemisphereLight #7AA4E6 / #384B6B @ 0.42 as radiance.
-    final sky = vm.Vector3(0.195, 0.371, 0.791) * 0.42;
-    final gnd = vm.Vector3(0.040, 0.069, 0.147) * 0.42;
+    // HemisphereLight #7AA4E6 / #384B6B @ 0.42. three.js shades it as
+    // albedo * irradiance / pi, so as an SH radiance field it is / pi.
+    final sky = vm.Vector3(0.195, 0.371, 0.791) * (0.42 / math.pi);
+    final gnd = vm.Vector3(0.040, 0.069, 0.147) * (0.42 / math.pi);
     for (int j = 0; j < numTheta; j++) {
       final v = (j + 0.5) / numTheta;
       final lat = (v - 0.5) * math.pi;

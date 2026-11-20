@@ -130,7 +130,8 @@ class ShibuyaSceneController {
     scene.directionalLight = fs.DirectionalLight(
       direction: w3(-moon.x, -moon.y, -moon.z),
       color: vm.Vector3(0.716, 0.823, 1.0),
-      intensity: 0.56 + 0.68 * 0.35,
+      // staticSun 0.56 + heroSun 0.68: both light everything (E_ rig).
+      intensity: 0.56 + 0.68,
     );
     scene.fog
       ..enabled = true
