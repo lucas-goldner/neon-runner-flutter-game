@@ -1,3 +1,4 @@
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -10,8 +11,12 @@ import 'hud_overlay.dart';
 import 'loading_screen.dart';
 import 'map_overview_screen.dart';
 
-/// Main game screen hosting Flutter Scene's [SceneView], frame ticker,
-/// desktop/web keyboard input (A/D, Space, S, Esc), and iOS touch swipes.
+/// Hosts the Flutter Scene view, the frame ticker, keyboard (A/D, Space,
+/// S, P, 1-3, Esc) and touch/swipe input, and the 2D overlays.
+///
+/// Debug URL parameters (web): `?autoplay=1` starts a run with Auto-Pilot,
+/// `&seek=0.5` jumps to that route fraction after landing,
+/// `&photo=skyline` opens photo mode with a preset.
 class NeonScrambleGameScreen extends StatefulWidget {
   const NeonScrambleGameScreen({super.key});
 
@@ -31,6 +36,11 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
   Offset? _dragStart;
   bool _swipeHandled = false;
 
+  // debug params
+  final Map<String, String> _q = Uri.base.queryParameters;
+  bool _autoStarted = false;
+  bool _seekDone = false;
+
   @override
   void initState() {
     super.initState();
@@ -38,17 +48,43 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     _soundFx = SoundFx();
     _controller = ShibuyaSceneController(state: _state, soundFx: _soundFx);
     _controller.initialize();
+    _ticker = createTicker(_onTick)..start();
+  }
 
-    _ticker = createTicker((elapsed) {
-      if (_lastTick == Duration.zero) {
-        _lastTick = elapsed;
-        return;
-      }
-      final dt = ((elapsed - _lastTick).inMicroseconds / 1e6).clamp(0.0, 0.05);
+  void _onTick(Duration elapsed) {
+    if (_lastTick == Duration.zero) {
       _lastTick = elapsed;
+      return;
+    }
+    final dt = ((elapsed - _lastTick).inMicroseconds / 1e6).clamp(0.0, 0.05);
+    _lastTick = elapsed;
+    _debugHooks();
+    // `?sim=N` runs N simulation substeps per frame (debug fast-forward).
+    final sub = int.tryParse(_q['sim'] ?? '') ?? 1;
+    for (int i = 0; i < sub; i++) {
       _controller.tick(dt);
-    })
-      ..start();
+    }
+  }
+
+  void _debugHooks() {
+    if (!_controller.initialized) return;
+    if (!_autoStarted && _q['autoplay'] == '1' && _state.phase == AppPhase.mapsTitle) {
+      _autoStarted = true;
+      if (!_state.autoPilot) _state.toggleAutoPilot();
+      _controller.startNewRun();
+    }
+    final seek = double.tryParse(_q['seek'] ?? '');
+    if (seek != null && !_seekDone && _state.phase == AppPhase.playing) {
+      _seekDone = true;
+      _controller.sim.seek(seek);
+    }
+    final photo = _q['photo'];
+    if (photo != null && !_state.photoMode && _seekDone && _state.isGameplay &&
+        _state.phase == AppPhase.finale) {
+      _state.setPhotoPreset(PhotoPreset.values.firstWhere((p) => p.name == photo,
+          orElse: () => PhotoPreset.hero));
+      _state.togglePhotoMode();
+    }
   }
 
   @override
@@ -60,46 +96,66 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     super.dispose();
   }
 
-  void _handleKeyEvent(KeyEvent event) {
-    if (event is! KeyDownEvent) return;
-    final key = event.logicalKey;
-
-    if (key == LogicalKeyboardKey.keyA || key == LogicalKeyboardKey.arrowLeft) {
-      _controller.moveLane(-1);
-    } else if (key == LogicalKeyboardKey.keyD ||
-        key == LogicalKeyboardKey.arrowRight) {
-      _controller.moveLane(1);
-    } else if (key == LogicalKeyboardKey.space ||
-        key == LogicalKeyboardKey.keyW ||
-        key == LogicalKeyboardKey.arrowUp) {
-      if (_state.screen == GameScreen.mapOverview) {
-        _controller.startNewRun();
-      } else {
-        _controller.jump();
-      }
-    } else if (key == LogicalKeyboardKey.keyS ||
-        key == LogicalKeyboardKey.arrowDown) {
-      _controller.slide();
-    } else if (key == LogicalKeyboardKey.escape ||
-        key == LogicalKeyboardKey.keyP) {
-      _state.togglePause();
-    }
+  void _play() {
+    _focusNode.requestFocus();
+    _controller.startNewRun();
   }
 
-  void _onPanStart(DragStartDetails details) {
-    _dragStart = details.localPosition;
+  void _togglePhoto() {
+    if (!_state.isGameplay) return;
+    _controller.resetPhotoCamera();
+    _state.togglePhotoMode();
+  }
+
+  KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is! KeyDownEvent) return KeyEventResult.ignored;
+    final k = event.logicalKey;
+    if (_state.phase == AppPhase.mapsTitle) {
+      if (k == LogicalKeyboardKey.space || k == LogicalKeyboardKey.enter) {
+        _play();
+        return KeyEventResult.handled;
+      }
+      return KeyEventResult.ignored;
+    }
+    if (k == LogicalKeyboardKey.keyP) {
+      _togglePhoto();
+    } else if (_state.photoMode) {
+      if (k == LogicalKeyboardKey.escape) _togglePhoto();
+      if (k == LogicalKeyboardKey.digit1) _state.setPhotoPreset(PhotoPreset.hero);
+      if (k == LogicalKeyboardKey.digit2) _state.setPhotoPreset(PhotoPreset.scramble);
+      if (k == LogicalKeyboardKey.digit3) _state.setPhotoPreset(PhotoPreset.skyline);
+      _controller.resetPhotoCamera();
+    } else if (k == LogicalKeyboardKey.keyA || k == LogicalKeyboardKey.arrowLeft) {
+      _controller.moveLane(-1);
+    } else if (k == LogicalKeyboardKey.keyD || k == LogicalKeyboardKey.arrowRight) {
+      _controller.moveLane(1);
+    } else if (k == LogicalKeyboardKey.space ||
+        k == LogicalKeyboardKey.keyW ||
+        k == LogicalKeyboardKey.arrowUp) {
+      _controller.jump();
+    } else if (k == LogicalKeyboardKey.keyS || k == LogicalKeyboardKey.arrowDown) {
+      _controller.slide();
+    } else if (k == LogicalKeyboardKey.enter && _state.phase == AppPhase.finale) {
+      _play();
+    } else {
+      return KeyEventResult.ignored;
+    }
+    return KeyEventResult.handled;
+  }
+
+  void _onPanStart(DragStartDetails d) {
+    _dragStart = d.localPosition;
     _swipeHandled = false;
   }
 
-  void _onPanUpdate(DragUpdateDetails details) {
+  void _onPanUpdate(DragUpdateDetails d) {
     if (_state.photoMode) {
-      _controller.orbitPhotoCamera(details.delta.dx);
+      _controller.orbitPhotoCamera(d.delta.dx, d.delta.dy);
       return;
     }
     if (_swipeHandled || _dragStart == null) return;
-    final delta = details.localPosition - _dragStart!;
+    final delta = d.localPosition - _dragStart!;
     if (delta.distance < 26) return;
-
     _swipeHandled = true;
     if (delta.dx.abs() > delta.dy.abs()) {
       _controller.moveLane(delta.dx > 0 ? 1 : -1);
@@ -113,59 +169,62 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFF060914),
-      body: KeyboardListener(
+      backgroundColor: const Color(0xFF07090E),
+      body: Focus(
         focusNode: _focusNode,
         autofocus: true,
-        onKeyEvent: _handleKeyEvent,
-        child: GestureDetector(
-          behavior: HitTestBehavior.opaque,
-          onTap: () => _focusNode.requestFocus(),
-          onPanStart: _onPanStart,
-          onPanUpdate: _onPanUpdate,
-          child: AnimatedBuilder(
-            animation: _state,
-            builder: (context, _) {
-              return Stack(
-                fit: StackFit.expand,
-                children: [
-                  if (_controller.initialized)
-                    fs.SceneView(
-                      _controller.scene,
-                      cameraBuilder: _controller.buildCamera,
-                    ),
-
-                  if (_state.screen == GameScreen.loading)
-                    LoadingScreen(
-                      progress: _state.loadingProgress,
-                      label: _state.loadingLabel,
-                    ),
-
-                  if (_state.screen == GameScreen.mapOverview)
-                    MapOverviewScreen(
-                      onPlay: () {
-                        _focusNode.requestFocus();
-                        _controller.startNewRun();
-                      },
-                    ),
-
-                  if (_state.screen != GameScreen.loading &&
-                      _state.screen != GameScreen.mapOverview)
-                    HudOverlay(
-                      state: _state,
-                      onToggleAutoPilot: _state.toggleAutoPilot,
-                      onToggleMute: () {
-                        _state.toggleMute();
-                        _soundFx.muted = _state.muted;
-                      },
-                      onTogglePause: _state.togglePause,
-                      onTogglePhotoMode: _state.togglePhotoMode,
-                      onPlayAgain: _controller.startNewRun,
-                      onReturnToMap: _state.returnToMap,
-                    ),
-                ],
-              );
-            },
+        onKeyEvent: _onKey,
+        child: Listener(
+          onPointerSignal: (e) {
+            if (e is PointerScrollEvent && _state.photoMode) {
+              _controller.zoomPhotoCamera(e.scrollDelta.dy);
+            }
+          },
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _focusNode.requestFocus(),
+            onPanStart: _onPanStart,
+            onPanUpdate: _onPanUpdate,
+            child: AnimatedBuilder(
+              animation: _state,
+              builder: (context, _) {
+                final title = _state.phase == AppPhase.mapsTitle;
+                return Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    if (_controller.initialized && !title)
+                      fs.SceneView(
+                        _controller.scene,
+                        cameraBuilder: _controller.buildCamera,
+                      ),
+                    if (_controller.initialized && title)
+                      ShibuyaMapView(
+                        level: _controller.level,
+                        time: _state.elapsed,
+                      ),
+                    if (title) MapsTitleCard(onPlay: _play),
+                    if (_state.isGameplay)
+                      HudOverlay(
+                        state: _state,
+                        level: _controller.level,
+                        onToggleAutoPilot: _state.toggleAutoPilot,
+                        onToggleMute: () {
+                          _state.toggleMute();
+                          _soundFx.muted = _state.muted;
+                        },
+                        onTogglePhoto: _togglePhoto,
+                        onPlayAgain: _play,
+                        onPhotoPreset: (p) {
+                          _controller.resetPhotoCamera();
+                          _state.setPhotoPreset(p);
+                        },
+                      ),
+                    if (_state.phase == AppPhase.loading)
+                      LoadingScreen(state: _state),
+                  ],
+                );
+              },
+            ),
           ),
         ),
       ),

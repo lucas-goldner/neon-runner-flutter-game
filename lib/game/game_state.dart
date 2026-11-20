@@ -10,15 +10,16 @@ enum ParkourMove {
   sprint('SPRINT'),
   overcharge('OVERCHARGE'),
   jump('JUMP'),
+  airFlip('AIR FLIP'),
   slide('SLIDE'),
   railGrind('RAIL GRIND'),
   wallRun('WALL RUN'),
   roofVault('ROOF VAULT'),
   neonSlide('NEON SLIDE'),
-  pinBeacon('PIN BEACON'),
+  pinBeacon('BOOST'),
   stumble('STUMBLE'),
   carDeflect('DEFLECT'),
-  hoodBounce('HOOD BOUNCE'),
+  hoodBounce('BOUNCE'),
   sideDeflect('SIDE DEFLECT'),
   finaleOrbit('FINALE');
 
@@ -73,7 +74,7 @@ class StreetSegment {
 
 /// Observable game state shared by the 3D controller and the Flutter HUD.
 class GameState extends ChangeNotifier {
-  static const double overchargeKmh = 140.0;
+  static const double overchargeKmh = 130.0;
 
   AppPhase phase = AppPhase.loading;
   ParkourMove move = ParkourMove.skyDrop;

@@ -4,1174 +4,566 @@ import 'package:flutter_scene/scene.dart' as fs;
 import 'package:vector_math/vector_math.dart' as vm;
 
 import 'game_state.dart';
-import 'neon_palette.dart';
+import 'hero_sim.dart';
+import 'level_data.dart';
+import 'mesh_buf.dart';
 import 'pegman_builder.dart';
+import 'route_spline.dart';
 import 'sound_fx.dart';
+import 'world_builder.dart';
+import 'world_textures.dart';
 
-enum ObstacleKind {
-  jdmCar,
-  taxi,
-  barrier,
-  overheadGate,
-}
+double _lerp(double a, double b, double t) => a + (b - a) * t;
+double _clamp(double v, double a, double b) => v < a ? a : (v > b ? b : v);
 
-class _TrafficObstacle {
-  _TrafficObstacle({
-    required this.node,
-    required this.kind,
-    required this.lane,
-    required this.z,
-    required this.baseY,
-    required this.halfWidth,
-    required this.halfLength,
-    required this.height,
-    required this.speedZ,
-  });
-
-  final fs.Node node;
-  final ObstacleKind kind;
-  final int lane;
-  double z;
-  final double baseY;
-  final double halfWidth;
-  final double halfLength;
-  final double height;
-  final double speedZ;
-  bool nearMissAwarded = false;
-}
-
-class _BoostRing {
-  _BoostRing({
-    required this.node,
-    required this.lane,
-    required this.y,
-    required this.z,
-  });
-
-  final fs.Node node;
-  final int lane;
-  final double y;
-  final double z;
-  bool collected = false;
-}
-
-class _NeonSignProp {
-  _NeonSignProp({
-    required this.material,
-    required this.baseEmissive,
-    required this.z,
-  });
-
-  final fs.PhysicallyBasedMaterial material;
-  final vm.Vector4 baseEmissive;
-  final double z;
-  bool ignited = false;
-}
-
-/// Manages the complete Flutter Scene 3D world for Neon Scramble:
-/// Shibuya Scramble Crossing -> Dogenzaka/Miyashita -> Yamanote Viaduct ->
-/// Meiji-dori -> Shibuya Stream Google Tokyo Finale Stage.
+/// Owns the Flutter Scene world for Neon Scramble: builds the OSM Shibuya
+/// level, runs [HeroSim] and drives Pegman, traffic and the camera rigs
+/// ported from the web demo (`computeCameraState`).
 class ShibuyaSceneController {
-  ShibuyaSceneController({
-    required this.state,
-    required this.soundFx,
-  });
+  ShibuyaSceneController({required this.state, required this.soundFx});
 
   final GameState state;
   final SoundFx soundFx;
-
   final fs.Scene scene = fs.Scene();
-  late final PegmanRig pegman;
 
   bool initialized = false;
+  late final ShibuyaLevel level;
+  late final HeroSim sim;
+  late final ShibuyaWorld world;
+  final PegmanRig pegman = PegmanRig();
+  final List<fs.Node> _taxiNodes = [];
+  final List<fs.Node> _driftNodes = [];
+  final List<fs.Node> _rain = [];
+  final math.Random _rng = math.Random(7);
 
-  // Lane coordinates (-1 = left, 0 = center, +1 = right)
-  static const List<double> laneX = [-3.0, 0.0, 3.0];
-
-  // Player kinematics
-  int targetLane = 1; // index into laneX
-  double playerX = 0.0;
-  double playerVelX = 0.0;
-  double playerY = 42.0;
-  double playerVelY = 0.0;
-  double playerZ = 0.0; // moves along -Z toward -totalRouteMeters
-  double forwardSpeed = 0.0; // meters/sec
-  double boostTimer = 0.0;
-  double slideTimer = 0.0;
-  double skyDropProgress = 0.0;
-  double shakeTimer = 0.0;
-  double photoOrbitAngle = 0.0;
-  double _totalTime = 0.0;
-
-  bool _wasWallRunning = false;
-
-  final List<_TrafficObstacle> _obstacles = [];
-  final List<_BoostRing> _boostRings = [];
-  final List<_NeonSignProp> _signs = [];
-  final math.Random _rng = math.Random(42);
-
-  static vm.Vector4 _scaleRgb(vm.Vector4 c, double k) =>
-      vm.Vector4(c.x * k, c.y * k, c.z * k, c.w);
+  // camera state (reference coordinates)
+  final vm.Vector3 camPos = vm.Vector3(68, 435, 68);
+  final vm.Vector3 camTarget = vm.Vector3(68, 0, 68);
+  vm.Vector3 camUp = vm.Vector3(0, 0, -1);
+  double camFov = 54;
+  double camRoll = 0;
+  final vm.Vector3 _springPos = vm.Vector3(68, 435, 68);
+  final vm.Vector3 _springVel = vm.Vector3.zero();
+  final vm.Vector3 _springTgt = vm.Vector3(68, 0, 68);
+  final vm.Vector3 _springTgtVel = vm.Vector3.zero();
+  bool _camInit = false;
+  double photoOrbit = 0;
+  double photoZoom = 1;
+  double _time = 0;
+  int _lastCalloutId = -1;
 
   Future<void> initialize() async {
-    state.setLoadingProgress(0.12, 'Initializing Flutter Scene GPU...');
+    state.setLoading(0.06, 'Loading Neon Scramble...');
     await fs.Scene.initializeStaticResources();
-
-    state.setLoadingProgress(0.35, 'Configuring Shibuya night lighting...');
-    _configureLightingAndPostProcess();
-
-    state.setLoadingProgress(0.55, 'Building Shibuya Crossing & skyline...');
-    pegman = PegmanRig()..attachToScene(scene);
-    _buildRoadAndCrosswalk();
-    _buildCitySkyline();
-    _buildPinArchesAndSigns();
-
-    state.setLoadingProgress(0.75, 'Constructing Yamanote Line viaduct...');
-    _buildYamanoteViaduct();
-    _buildSideRailsAndWallPanels();
-
-    state.setLoadingProgress(0.90, 'Lighting Shibuya Stream Google stage...');
-    _buildGoogleFinaleStage();
-    _populateObstaclesAndRings();
-
-    _resetPlayerForOverview();
+    state.setLoading(0.18, 'Loading Shibuya...');
+    level = await ShibuyaLevel.load();
+    sim = HeroSim(level, state);
+    state.setLoading(0.32, 'Lighting Shibuya night sky...');
+    _configureLighting();
+    state.setLoading(0.44, 'Loading Shibuya skyline...');
+    final tex = await WorldTextures.create(level);
+    state.setLoading(0.62, 'Building Shibuya streets...');
+    world = ShibuyaWorld(level, sim.spline, tex)..build();
+    scene.add(world.root);
+    state.setLoading(0.76, 'Loading Pegman...');
+    pegman.attach(scene.root);
+    state.setLoading(0.86, 'Loading Tokyo street fleet...');
+    _buildTraffic();
+    _buildRain();
+    state.setLoading(0.95, 'Placing Shibuya Stream...');
     initialized = true;
-    state.setLoadingProgress(1.0, 'Shibuya ready');
-    await Future<void>.delayed(const Duration(milliseconds: 220));
+    state.setLoading(1.0, 'Shibuya ready');
+    await Future<void>.delayed(const Duration(milliseconds: 250));
     state.finishLoading();
   }
 
-  void _configureLightingAndPostProcess() {
-    // Night-time Shibuya: dark navy ambient instead of the bright default
-    // studio IBL, a navy gradient sky, cool moonlight and distance fog so the
-    // skyline fades into the same deep blue haze as the web demo.
+  void _configureLighting() {
+    // Moonlit sapphire Tokyo twilight (the demo's sky shader colours).
     scene.environment =
-        fs.EnvironmentMap.constantDiffuse(vm.Vector3(0.020, 0.032, 0.075));
+        fs.EnvironmentMap.constantDiffuse(vm.Vector3(0.030, 0.050, 0.120));
     scene.environmentIntensity = 1.0;
-    scene.skybox = fs.Skybox(
-      fs.GradientSkySource(
-        zenithColor: vm.Vector3(0.004, 0.008, 0.022),
-        horizonColor: vm.Vector3(0.020, 0.034, 0.075),
-        groundColor: vm.Vector3(0.010, 0.016, 0.036),
-        sunColor: vm.Vector3.zero(),
-      ),
-    );
+    scene.skybox = fs.Skybox(fs.GradientSkySource(
+      zenithColor: vm.Vector3(0.0065, 0.0175, 0.0580),
+      horizonColor: vm.Vector3(0.0380, 0.0980, 0.2680),
+      groundColor: vm.Vector3(0.0055, 0.0095, 0.0220),
+      sunColor: vm.Vector3.zero(),
+    ));
     scene.toneMapping = fs.ToneMappingMode.agx;
     scene.exposure = 1.0;
     scene.directionalLight = fs.DirectionalLight(
-      direction: vm.Vector3(-0.35, -1.0, -0.25),
-      color: vm.Vector3(0.55, 0.68, 1.0),
-      intensity: 0.55,
+      direction: vm.Vector3(-0.35, -1.0, 0.25),
+      color: vm.Vector3(0.6, 0.72, 1.0),
+      intensity: 0.7,
     );
     scene.fog
       ..enabled = true
       ..mode = fs.FogMode.exponential
-      ..color = vm.Vector3(0.018, 0.030, 0.068)
-      ..density = 0.011;
+      ..color = vm.Vector3(0.022, 0.045, 0.115)
+      ..density = 0.0026;
     scene.postProcess.bloom
       ..enabled = true
-      ..intensity = 0.55
+      ..intensity = 0.6
       ..threshold = 1.0
       ..scatter = 0.65;
   }
 
-  void _buildRoadAndCrosswalk() {
-    final asphaltMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = NeonPalette.asphaltBase
-      ..metallicFactor = 0.25
-      ..roughnessFactor = 0.22;
-
-    // Ground street from z = +20 to z = -980
-    final road = fs.Node(
-      name: 'shibuya_road',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(14.0, 0.2, 1020.0)), asphaltMat),
-    )..position = vm.Vector3(0, -0.1, -480.0);
-    scene.add(road);
-
-    // Sidewalks
-    final sidewalkMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.05, 0.06, 0.09, 1.0)
-      ..metallicFactor = 0.1
-      ..roughnessFactor = 0.65;
-
-    for (final side in [-1.0, 1.0]) {
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(5.0, 0.35, 1020.0)), sidewalkMat),
-        )..position = vm.Vector3(side * 9.5, 0.08, -480.0),
-      );
+  fs.Node _car(String type, double w, double h, double l, String glow) {
+    final body = MeshBuf();
+    final cabin = MeshBuf();
+    final lights = MeshBuf();
+    final tails = MeshBuf();
+    body.box(vm.Vector3(0, 0.25 + h * 0.22, 0), vm.Vector3(w, h * 0.45, l), 0);
+    cabin.box(vm.Vector3(0, 0.25 + h * 0.62, -l * 0.05),
+        vm.Vector3(w * 0.86, h * 0.36, l * 0.5), 0);
+    for (final sd in [-1.0, 1.0]) {
+      lights.box(vm.Vector3(sd * w * 0.32, 0.25 + h * 0.28, l / 2),
+          vm.Vector3(w * 0.22, 0.12, 0.05), 0);
+      tails.box(vm.Vector3(sd * w * 0.32, 0.25 + h * 0.3, -l / 2),
+          vm.Vector3(w * 0.24, 0.1, 0.05), 0);
     }
-
-    // Shibuya Scramble Crossing diagonal & cardinal zebra stripes around z = 0..-28
-    final stripeMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = NeonPalette.crosswalkBase
-      ..metallicFactor = 0.0
-      ..roughnessFactor = 0.45
-      ..emissiveFactor = NeonPalette.emissiveWhiteSoft;
-
-    for (int i = -5; i <= 5; i++) {
-      // Main forward crosswalk
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.55, 0.03, 4.2)), stripeMat),
-        )..position = vm.Vector3(i * 1.15, 0.02, -6.0),
-      );
-      // Diagonal scramble stripes
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.55, 0.03, 5.2)), stripeMat),
-        )
-          ..position = vm.Vector3(i * 1.15, 0.02, -16.0)
-          ..rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), 0.58),
-      );
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.55, 0.03, 5.2)), stripeMat),
-        )
-          ..position = vm.Vector3(i * 1.15, 0.02, -24.0)
-          ..rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), -0.58),
-      );
+    final under = MeshBuf()
+      ..box(vm.Vector3(0, 0.08, 0), vm.Vector3(w * 0.9, 0.04, l * 0.9), 0);
+    const colors = <String, String>{
+      'CrownComfortTaxi': '#1F2937',
+      'DriftWidebodyOrange': '#F97316',
+      'GtrMidnightBlue': '#1E3A8A',
+      'PandaHatch86': '#E5E7EB',
+      'TunerPearlSilver': '#CBD5E1',
+    };
+    final root = fs.Node(name: type);
+    root.add(fs.Node(
+        mesh: fs.Mesh(body.build(),
+            pbr(hexColor(colors[type] ?? '#1F2937'), metallic: 0.6, roughness: 0.3))));
+    root.add(fs.Node(
+        mesh: fs.Mesh(cabin.build(),
+            pbr(hexColor('#0F172A'), metallic: 0.8, roughness: 0.15, emissive: hexColor('#1E3A5F', 0.4)))));
+    root.add(fs.Node(
+        mesh: fs.Mesh(lights.build(), pbr(hexColor('#FFFFFF'), emissive: hexColor('#FFF3D6', 3.0)))));
+    root.add(fs.Node(
+        mesh: fs.Mesh(tails.build(), pbr(hexColor('#EF4444'), emissive: hexColor('#EF4444', 3.0)))));
+    root.add(fs.Node(
+        mesh: fs.Mesh(under.build(), pbr(hexColor(glow), emissive: hexColor(glow, 2.6)))));
+    if (type == 'CrownComfortTaxi') {
+      final sign = MeshBuf()
+        ..box(vm.Vector3(0, 0.25 + h * 0.86, 0), vm.Vector3(0.5, 0.2, 0.3), 0);
+      root.add(fs.Node(
+          mesh: fs.Mesh(sign.build(), pbr(hexColor('#FBBC05'), emissive: hexColor('#FBBC05', 2.2)))));
     }
+    scene.add(root);
+    return root;
+  }
 
-    // Orange glowing landing target ring at Scramble Crossing (z = -4)
-    final targetRingMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.45, 0.15, 1.0)
-      ..emissiveFactor = NeonPalette.emissiveOrange;
-    scene.add(_buildOctagonRingNode(radius: 2.2, thickness: 0.10, material: targetRingMat)
-      ..position = vm.Vector3(0, 0.06, -4.0)
-      ..rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), math.pi / 2));
-
-    // Lane dashes along street sections
-    final dashMat = fs.UnlitMaterial()
-      ..baseColorFactor = vm.Vector4(0.65, 0.72, 0.85, 0.8);
-    for (double z = -34.0; z > -920.0; z -= 14.0) {
-      if (z < -315 && z > -625) continue; // elevated Yamanote section
-      for (final x in [-1.5, 1.5]) {
-        scene.add(
-          fs.Node(
-            mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.14, 0.02, 4.2)), dashMat),
-          )..position = vm.Vector3(x, 0.015, z),
-        );
-      }
+  void _buildTraffic() {
+    for (final t in sim.taxis) {
+      _taxiNodes.add(_car(t.type, t.width, t.height, t.length, '#FF4F00'));
+    }
+    for (final c in sim.drift) {
+      _driftNodes.add(_car(c.type, 1.9, 1.35, 4.5, c.underglow));
     }
   }
 
-  void _buildCitySkyline() {
-    final darkTowerMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = NeonPalette.buildingDark
-      ..metallicFactor = 0.35
-      ..roughnessFactor = 0.55;
-
-    final midTowerMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = NeonPalette.buildingMid
-      ..metallicFactor = 0.42
-      ..roughnessFactor = 0.45;
-
-    final warmWindowMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.82, 0.45, 1.0)
-      ..metallicFactor = 0.0
-      ..roughnessFactor = 0.3
-      ..emissiveFactor = vm.Vector4(1.45, 0.92, 0.32, 1.0);
-
-    final coolWindowMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.55, 0.78, 1.0, 1.0)
-      ..metallicFactor = 0.0
-      ..roughnessFactor = 0.3
-      ..emissiveFactor = vm.Vector4(0.45, 0.78, 1.35, 1.0);
-
-    // Dense Shibuya skyscrapers lining both sides of the corridor
-    for (double z = 12.0; z > -950.0; z -= 22.0) {
-      for (final side in [-1.0, 1.0]) {
-        final h = 16.0 + _rng.nextDouble() * 34.0;
-        final w = 9.0 + _rng.nextDouble() * 6.0;
-        final d = 14.0 + _rng.nextDouble() * 5.0;
-        final x = side * (12.5 + w * 0.45 + _rng.nextDouble() * 3.5);
-
-        final building = fs.Node(
-          mesh: fs.Mesh(
-            fs.CuboidGeometry(vm.Vector3(w, h, d)),
-            _rng.nextBool() ? darkTowerMat : midTowerMat,
-          ),
-        )..position = vm.Vector3(x, h * 0.5, z);
-        scene.add(building);
-
-        // Warm amber / cool blue glowing window bands facing the street
-        final winMat = _rng.nextDouble() < 0.72 ? warmWindowMat : coolWindowMat;
-        final bandCount = (h / 5.5).floor().clamp(2, 6);
-        final faceX = x - side * (w * 0.5 + 0.08);
-        for (int b = 0; b < bandCount; b++) {
-          final bandY = 3.2 + b * 4.6;
-          if (bandY > h - 1.5) break;
-          scene.add(
-            fs.Node(
-              mesh: fs.Mesh(
-                fs.CuboidGeometry(vm.Vector3(0.12, 1.35, d * 0.76)),
-                winMat,
-              ),
-            )..position = vm.Vector3(faceX, bandY, z),
-          );
-        }
-
-        // Vertical glowing Shibuya neon billboards on alternating buildings
-        if (_rng.nextDouble() < 0.65) {
-          final emissive =
-              NeonPalette.signEmissives[_rng.nextInt(NeonPalette.signEmissives.length)];
-          final signMat = fs.PhysicallyBasedMaterial()
-            ..baseColorFactor = vm.Vector4(0.12, 0.14, 0.20, 1.0)
-            ..metallicFactor = 0.2
-            ..roughnessFactor = 0.25
-            ..emissiveFactor = _scaleRgb(emissive, 0.45);
-
-          final signH = 5.5 + _rng.nextDouble() * 6.5;
-          final signNode = fs.Node(
-            mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.35, signH, 2.2)), signMat),
-          )..position = vm.Vector3(
-              side * 8.4,
-              5.5 + signH * 0.5,
-              z + (_rng.nextDouble() - 0.5) * 6.0,
-            );
-          scene.add(signNode);
-          _signs.add(
-            _NeonSignProp(
-              material: signMat,
-              baseEmissive: emissive,
-              z: signNode.position.z,
-            ),
-          );
-        }
-      }
+  void _buildRain() {
+    final mat = unlit(vm.Vector4(0.55, 0.65, 0.85, 0.35))
+      ..alphaMode = fs.AlphaMode.blend;
+    final geo = fs.CuboidGeometry(vm.Vector3(0.012, 0.9, 0.012));
+    for (int i = 0; i < 220; i++) {
+      final n = fs.Node(mesh: fs.Mesh(geo, mat))
+        ..rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), 0.18);
+      _rain.add(n);
+      scene.add(n);
     }
   }
 
-  void _buildPinArchesAndSigns() {
-    final whiteNeonMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.95, 0.98, 1.0, 1.0)
-      ..emissiveFactor = vm.Vector4(2.2, 2.35, 2.6, 1.0);
-
-    final blueSignMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.04, 0.24, 0.68, 1.0)
-      ..emissiveFactor = vm.Vector4(0.12, 0.55, 1.55, 1.0);
-
-    final greenJrSignMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.05, 0.52, 0.22, 1.0)
-      ..emissiveFactor = vm.Vector4(0.18, 1.45, 0.48, 1.0);
-
-    // Street View Pin Arches placed along key Shibuya landmarks
-    const archZs = [-48.0, -145.0, -255.0, -405.0, -555.0, -710.0, -835.0];
-    for (final z in archZs) {
-      final baseY = _trackElevationAtZ(z);
-      final arch = fs.Node(name: 'pin_arch_$z')..position = vm.Vector3(0, baseY, z);
-
-      // Left & right pillars
-      arch.add(fs.Node(
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.32, 6.2, 0.32)), whiteNeonMat),
-      )..position = vm.Vector3(-5.6, 3.1, 0));
-      arch.add(fs.Node(
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.32, 6.2, 0.32)), whiteNeonMat),
-      )..position = vm.Vector3(5.6, 3.1, 0));
-      // Top crossbar
-      arch.add(fs.Node(
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(11.5, 0.32, 0.32)), whiteNeonMat),
-      )..position = vm.Vector3(0, 6.2, 0));
-
-      // Glowing Google Maps Pin silhouette at arch crown
-      arch.add(_buildOctagonRingNode(radius: 1.05, thickness: 0.14, material: whiteNeonMat)
-        ..position = vm.Vector3(0, 5.2, 0));
-      arch.add(fs.Node(
-        mesh: fs.Mesh(fs.SphereGeometry(radius: 0.34), whiteNeonMat),
-      )..position = vm.Vector3(0, 5.3, 0));
-      scene.add(arch);
-    }
-
-    // Overhead Japanese highway / JR gantry signs
-    for (double z = -85.0; z > -880.0; z -= 130.0) {
-      final isYamanote = z < -320 && z > -620;
-      final baseY = _trackElevationAtZ(z);
-      final board = fs.Node(
-        mesh: fs.Mesh(
-          fs.CuboidGeometry(vm.Vector3(5.6, 2.2, 0.22)),
-          isYamanote ? greenJrSignMat : blueSignMat,
-        ),
-      )..position = vm.Vector3(isYamanote ? 0.0 : 3.4, baseY + 6.8, z);
-      scene.add(board);
-    }
-  }
-
-  void _buildYamanoteViaduct() {
-    final deckMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.08, 0.09, 0.12, 1.0)
-      ..metallicFactor = 0.25
-      ..roughnessFactor = 0.6;
-
-    final railMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.4, 0.95, 0.45, 1.0)
-      ..metallicFactor = 0.7
-      ..roughnessFactor = 0.2
-      ..emissiveFactor = NeonPalette.emissiveYamanote;
-
-    final tieMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.14, 0.14, 0.18, 1.0)
-      ..metallicFactor = 0.15
-      ..roughnessFactor = 0.75;
-
-    // Elevated viaduct deck from z = -320 to z = -620 at y = 4.6
-    scene.add(
-      fs.Node(
-        name: 'yamanote_deck',
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(11.6, 0.6, 300.0)), deckMat),
-      )..position = vm.Vector3(0, 4.3, -470.0),
-    );
-
-    // Entry & exit glowing launch rails
-    final rampRailMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.65, 0.2, 1.0)
-      ..emissiveFactor = NeonPalette.emissiveOrange;
-
-    // Entry ramp rail (-300..-322)
-    scene.add(
-      fs.Node(
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.28, 0.24, 24.0)), rampRailMat),
-      )
-        ..position = vm.Vector3(0, 2.3, -310.0)
-        ..rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), 0.20),
-    );
-
-    // Three parallel glowing Yamanote rails on the viaduct
-    for (final x in laneX) {
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.22, 0.18, 300.0)), railMat),
-        )..position = vm.Vector3(x, 4.72, -470.0),
-      );
-    }
-
-    // Railroad ties & steel overhead catenary gantries
-    for (double z = -324.0; z > -616.0; z -= 4.5) {
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(9.6, 0.10, 0.42)), tieMat),
-        )..position = vm.Vector3(0, 4.62, z),
-      );
-      if (z.abs().toInt() % 36 < 5) {
-        for (final side in [-1.0, 1.0]) {
-          scene.add(
-            fs.Node(
-              mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.35, 7.2, 0.35)), tieMat),
-            )..position = vm.Vector3(side * 5.6, 8.2, z),
-          );
-        }
-        scene.add(
-          fs.Node(
-            mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(11.6, 0.30, 0.30)), tieMat),
-          )..position = vm.Vector3(0, 11.7, z),
-        );
-      }
-    }
-  }
-
-  void _buildSideRailsAndWallPanels() {
-    final grindRailMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.72, 0.25, 1.0)
-      ..emissiveFactor = NeonPalette.emissiveOrange;
-
-    final wallPanelMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.10, 0.65, 1.0, 0.42)
-      ..alphaMode = fs.AlphaMode.blend
-      ..emissiveFactor = _scaleRgb(NeonPalette.emissiveCyan, 0.75);
-
-    // Street-level side grind rails & glowing cyan wall-run panels
-    const railSpans = [
-      (-110.0, -170.0, -1.0),
-      (-205.0, -275.0, 1.0),
-      (-665.0, -745.0, -1.0),
-      (-770.0, -840.0, 1.0),
-    ];
-
-    for (final span in railSpans) {
-      final startZ = span.$1;
-      final endZ = span.$2;
-      final side = span.$3;
-      final len = (startZ - endZ).abs();
-      final midZ = (startZ + endZ) * 0.5;
-
-      // Glowing side rail at lane edge
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.24, 0.22, len)), grindRailMat),
-        )..position = vm.Vector3(side * 3.1, 1.65, midZ),
-      );
-
-      // Holographic cyan wall-run panel on opposite side
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.18, 3.6, len * 0.75)), wallPanelMat),
-        )..position = vm.Vector3(-side * 4.4, 2.6, midZ),
-      );
-    }
-  }
-
-  void _buildGoogleFinaleStage() {
-    const stageZ = -GameState.totalRouteMeters;
-    const stageY = 6.2;
-
-    // Sweeping illuminated ramp up to the Shibuya Stream stage (-900..-950)
-    final rampMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.10, 0.12, 0.18, 1.0)
-      ..metallicFactor = 0.4
-      ..roughnessFactor = 0.25;
-    final rampRailMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.85, 0.45, 1.0)
-      ..emissiveFactor = NeonPalette.emissiveOrange;
-
-    scene.add(
-      fs.Node(
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(6.8, 0.4, 52.0)), rampMat),
-      )
-        ..position = vm.Vector3(0, stageY * 0.5, stageZ + 32.0)
-        ..rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), 0.12),
-    );
-    for (final side in [-1.0, 1.0]) {
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.22, 0.22, 52.0)), rampRailMat),
-        )
-          ..position = vm.Vector3(side * 3.3, stageY * 0.5 + 0.35, stageZ + 32.0)
-          ..rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), 0.12),
-      );
-    }
-
-    // Dark stage deck
-    final stageDeck = fs.Node(
-      name: 'google_finale_stage',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(22.0, 0.8, 18.0)), rampMat),
-    )..position = vm.Vector3(0, stageY - 0.4, stageZ - 2.0);
-    scene.add(stageDeck);
-
-    // Concentric glowing white/gold center rings on the stage floor
-    final stageRingMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.96, 0.85, 1.0)
-      ..emissiveFactor = vm.Vector4(2.8, 2.4, 1.6, 1.0);
-    for (final r in [1.6, 3.2]) {
-      scene.add(_buildOctagonRingNode(radius: r, thickness: 0.14, material: stageRingMat)
-        ..position = vm.Vector3(0, stageY + 0.06, stageZ)
-        ..rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), math.pi / 2));
-    }
-
-    // Black steel concert truss frame behind Pegman
-    final trussMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.06, 0.07, 0.10, 1.0)
-      ..metallicFactor = 0.8
-      ..roughnessFactor = 0.35;
-    for (final x in [-8.5, -4.2, 0.0, 4.2, 8.5]) {
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.28, 9.5, 0.28)), trussMat),
-        )..position = vm.Vector3(x, stageY + 4.7, stageZ - 6.8),
-      );
-    }
-    for (final y in [2.5, 6.2, 9.2]) {
-      scene.add(
-        fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(18.0, 0.25, 0.25)), trussMat),
-        )..position = vm.Vector3(0, stageY + y, stageZ - 6.8),
-      );
-    }
-
-    // Massive 3D glowing "Google" neon marquee blocks on the truss
-    final gEmissives = NeonPalette.googleEmissives;
-    final letterSpecs = [
-      (-6.8, gEmissives[0], 2.4, 3.2), // G (Blue)
-      (-4.0, gEmissives[1], 2.1, 2.2), // o (Red)
-      (-1.4, gEmissives[2], 2.1, 2.2), // o (Yellow)
-      (1.3, gEmissives[0], 2.1, 2.6), // g (Blue)
-      (3.6, gEmissives[3], 0.85, 3.4), // l (Green)
-      (5.9, gEmissives[1], 2.1, 2.2), // e (Red)
-    ];
-
-    for (final spec in letterSpecs) {
-      final mat = fs.PhysicallyBasedMaterial()
-        ..baseColorFactor = vm.Vector4(0.95, 0.95, 0.98, 1.0)
-        ..emissiveFactor = spec.$2;
-      final lx = spec.$1;
-      final lw = spec.$3;
-      final lh = spec.$4;
-      final cy = stageY + 4.6;
-      final cz = stageZ - 6.2;
-
-      if (lw < 1.2) {
-        // Vertical 'l' bar
-        scene.add(fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.55, lh, 0.45)), mat),
-        )..position = vm.Vector3(lx, cy + 0.3, cz));
-      } else {
-        // Glowing neon ring-letter silhouette
-        scene.add(_buildOctagonRingNode(
-          radius: lw * 0.55,
-          thickness: 0.32,
-          material: mat,
-        )..position = vm.Vector3(lx, cy, cz));
-      }
-    }
-  }
-
-  void _populateObstaclesAndRings() {
-    final jdmBodyMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.06, 0.08, 0.14, 1.0)
-      ..metallicFactor = 0.85
-      ..roughnessFactor = 0.18;
-    final taxiBodyMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.95, 0.72, 0.05, 1.0)
-      ..metallicFactor = 0.45
-      ..roughnessFactor = 0.28;
-    final headlightMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.98, 0.92, 1.0)
-      ..emissiveFactor = vm.Vector4(2.8, 2.6, 2.2, 1.0);
-    final taillightMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.1, 0.1, 1.0)
-      ..emissiveFactor = NeonPalette.emissiveRed;
-    final barrierMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.15, 0.15, 0.18, 1.0)
-      ..emissiveFactor = _scaleRgb(NeonPalette.emissiveOrange, 0.75);
-    final ringGoldMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.82, 0.25, 1.0)
-      ..emissiveFactor = NeonPalette.emissiveOrange;
-    final ringGreenMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(0.35, 1.0, 0.55, 1.0)
-      ..emissiveFactor = NeonPalette.emissiveYamanote;
-
-    // Spawn street traffic, viaduct barriers, and octagonal boost rings
-    for (double z = -58.0; z > -885.0; z -= 26.0) {
-      final isViaduct = z < -325.0 && z > -615.0;
-      final baseY = _trackElevationAtZ(z);
-      final lane = _rng.nextInt(3);
-
-      if (isViaduct) {
-        // Construction barrier on Yamanote viaduct (jumpable)
-        final node = fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(2.2, 1.05, 0.85)), barrierMat),
-        )..position = vm.Vector3(laneX[lane], baseY + 0.65, z);
-        scene.add(node);
-        _obstacles.add(
-          _TrafficObstacle(
-            node: node,
-            kind: ObstacleKind.barrier,
-            lane: lane,
-            z: z,
-            baseY: baseY,
-            halfWidth: 1.05,
-            halfLength: 0.55,
-            height: 1.15,
-            speedZ: 0.0,
-          ),
-        );
-      } else {
-        // JDM coupe or Tokyo taxi
-        final isTaxi = _rng.nextDouble() < 0.35;
-        final carNode = fs.Node()..position = vm.Vector3(laneX[lane], baseY, z);
-        carNode.add(fs.Node(
-          mesh: fs.Mesh(
-            fs.CuboidGeometry(vm.Vector3(1.85, 0.82, 4.1)),
-            isTaxi ? taxiBodyMat : jdmBodyMat,
-          ),
-        )..position = vm.Vector3(0, 0.55, 0));
-        carNode.add(fs.Node(
-          mesh: fs.Mesh(
-            fs.CuboidGeometry(vm.Vector3(1.52, 0.52, 2.0)),
-            isTaxi ? taxiBodyMat : jdmBodyMat,
-          ),
-        )..position = vm.Vector3(0, 1.15, -0.15));
-        // Glowing red taillights facing Pegman (+Z)
-        carNode.add(fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(1.65, 0.16, 0.10)), taillightMat),
-        )..position = vm.Vector3(0, 0.68, 2.06));
-        // Bright headlights (-Z)
-        carNode.add(fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(1.60, 0.16, 0.10)), headlightMat),
-        )..position = vm.Vector3(0, 0.62, -2.06));
-
-        scene.add(carNode);
-        _obstacles.add(
-          _TrafficObstacle(
-            node: carNode,
-            kind: isTaxi ? ObstacleKind.taxi : ObstacleKind.jdmCar,
-            lane: lane,
-            z: z,
-            baseY: baseY,
-            halfWidth: 0.95,
-            halfLength: 2.1,
-            height: 1.45,
-            speedZ: isTaxi ? 4.0 : 7.5,
-          ),
-        );
-      }
-
-      // Place an octagonal Boost Ring every second segment in a safe lane
-      if (z.abs().toInt() % 52 < 26) {
-        final ringLane = (lane + 1) % 3;
-        final ringY = baseY + (isViaduct ? 2.1 : 1.9);
-        final ringNode = _buildOctagonRingNode(
-          radius: 1.45,
-          thickness: 0.14,
-          material: isViaduct ? ringGreenMat : ringGoldMat,
-        )..position = vm.Vector3(laneX[ringLane], ringY, z - 12.0);
-        scene.add(ringNode);
-        _boostRings.add(
-          _BoostRing(node: ringNode, lane: ringLane, y: ringY, z: z - 12.0),
-        );
-      }
-    }
-  }
-
-  fs.Node _buildOctagonRingNode({
-    required double radius,
-    required double thickness,
-    required fs.Material material,
-  }) {
-    final ring = fs.Node();
-    const sides = 8;
-    final segLen = 2 * radius * math.tan(math.pi / sides) + thickness * 0.6;
-    for (int i = 0; i < sides; i++) {
-      final angle = (i / sides) * math.pi * 2;
-      final seg = fs.Node(
-        mesh: fs.Mesh(
-          fs.CuboidGeometry(vm.Vector3(segLen, thickness, thickness)),
-          material,
-        ),
-      )
-        ..position = vm.Vector3(
-          math.cos(angle) * radius,
-          math.sin(angle) * radius,
-          0,
-        )
-        ..rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), angle + math.pi / 2);
-      ring.add(seg);
-    }
-    return ring;
-  }
-
-  double _trackElevationAtZ(double z) {
-    final dist = (-z).clamp(0.0, GameState.totalRouteMeters);
-    if (dist < 300.0) return 0.0;
-    if (dist < 322.0) {
-      final t = (dist - 300.0) / 22.0;
-      return 4.65 * t;
-    }
-    if (dist < 618.0) return 4.65;
-    if (dist < 638.0) {
-      final t = (dist - 618.0) / 20.0;
-      return 4.65 * (1.0 - t);
-    }
-    if (dist < 902.0) return 0.0;
-    if (dist < 952.0) {
-      final t = (dist - 902.0) / 50.0;
-      return 6.2 * t;
-    }
-    return 6.2;
-  }
-
-  void _resetPlayerForOverview() {
-    targetLane = 1;
-    playerX = 0.0;
-    playerVelX = 0.0;
-    playerY = 44.0;
-    playerVelY = 0.0;
-    playerZ = -2.0;
-    forwardSpeed = 0.0;
-    boostTimer = 0.0;
-    slideTimer = 0.0;
-    skyDropProgress = 0.0;
-    shakeTimer = 0.0;
-    _wasWallRunning = false;
-    pegman.resetTrail(vm.Vector3(playerX, playerY, playerZ));
-  }
-
+  // ----------------------------------------------------------- run flow
   void startNewRun() {
-    _resetPlayerForOverview();
-    for (final o in _obstacles) {
-      o.nearMissAwarded = false;
+    if (!initialized) return;
+    sim.reset();
+    state.beginRun();
+    pegman.resetTrail();
+    _camInit = false;
+    photoOrbit = 0;
+    photoZoom = 1;
+    for (final g in world.pinGates) {
+      g.setLit(false);
     }
-    for (final r in _boostRings) {
-      r.collected = false;
-      r.node.visible = true;
+    for (final p in world.slidePortals) {
+      p.setLit(false);
     }
-    for (final s in _signs) {
-      s.ignited = false;
-      s.material.emissiveFactor = _scaleRgb(s.baseEmissive, 0.45);
+    for (final l in world.googleLetters) {
+      l.material.emissiveFactor = vm.Vector4(0.02, 0.02, 0.03, 1);
     }
-    state.startRun();
   }
 
-  void moveLane(int delta) {
-    if (state.screen != GameScreen.playing || state.phase == RunPhase.skyDrop) {
-      return;
-    }
-    final next = (targetLane + delta).clamp(0, 2);
-    if (next != targetLane) {
-      targetLane = next;
-      soundFx.playLaneSwitch();
-    }
-  }
+  void moveLane(int dir) => sim.moveLane(dir);
 
   void jump() {
-    if (state.screen != GameScreen.playing || state.phase == RunPhase.skyDrop) {
-      return;
-    }
-    final groundY = _trackElevationAtZ(playerZ);
-    if (playerY <= groundY + 0.18) {
-      playerVelY = 12.6;
-      slideTimer = 0.0;
-      soundFx.playJump();
-    }
+    if (state.phase == AppPhase.playing && !state.autoPilot) sim.pressJump();
   }
 
   void slide() {
-    if (state.screen != GameScreen.playing || state.phase == RunPhase.skyDrop) {
-      return;
-    }
-    slideTimer = 0.65;
-    if (playerY > _trackElevationAtZ(playerZ) + 0.2) {
-      playerVelY = -18.0; // fast slam
-    }
-    soundFx.playLaneSwitch();
+    if (state.phase == AppPhase.playing && !state.autoPilot) sim.pressSlide();
   }
 
-  void orbitPhotoCamera(double deltaX) {
-    if (state.photoMode) {
-      photoOrbitAngle += deltaX * 0.012;
-    }
+  void orbitPhotoCamera(double dx, [double dy = 0]) {
+    photoOrbit += dx * 0.008;
   }
 
+  void zoomPhotoCamera(double delta) {
+    photoZoom = _clamp(photoZoom * (1 + delta * 0.0015), 0.4, 2.5);
+  }
+
+  void resetPhotoCamera() {
+    photoOrbit = 0;
+    photoZoom = 1;
+  }
+
+  // --------------------------------------------------------------- tick
   void tick(double dt) {
     if (!initialized) return;
-    _totalTime += dt;
-
-    if (state.screen == GameScreen.victory) {
-      if (state.photoMode) {
-        photoOrbitAngle += dt * 0.25;
-      }
-      pegman.updatePose(
-        dt: dt,
-        worldPosition: vm.Vector3(0, 6.2, -GameState.totalRouteMeters),
-        laneVelocityX: 0,
-        isSkyDrop: false,
-        isSliding: false,
-        isJumping: false,
-        isGrinding: false,
-        isWallRunning: false,
-        isVictory: true,
-        wallSide: 0,
-        speedRatio: 0,
-        time: _totalTime,
-      );
-      return;
-    }
-
-    if (state.screen != GameScreen.playing) return;
-
-    if (shakeTimer > 0) {
-      shakeTimer = (shakeTimer - dt).clamp(0.0, 1.0);
-    }
-
-    // Phase 1: SKY DROP into Shibuya Scramble Crossing
-    if (state.phase == RunPhase.skyDrop) {
-      skyDropProgress = (skyDropProgress + dt * 0.58).clamp(0.0, 1.0);
-      final eased = 1.0 - math.pow(1.0 - skyDropProgress, 3.0).toDouble();
-      playerY = 44.0 * (1.0 - eased);
-      playerZ = -2.0 - eased * 3.0;
-      pegman.updatePose(
-        dt: dt,
-        worldPosition: vm.Vector3(playerX, playerY, playerZ),
-        laneVelocityX: 0,
-        isSkyDrop: true,
-        isSliding: false,
-        isJumping: false,
-        isGrinding: false,
-        isWallRunning: false,
-        isVictory: false,
-        wallSide: 0,
-        speedRatio: 0,
-        time: _totalTime,
-      );
-
-      if (skyDropProgress >= 1.0) {
-        forwardSpeed = 26.0;
-        state.updateFrame(
-          dt: dt,
-          currentSpeedKmh: 94.0,
-          currentDistanceMeters: 5.0,
-          currentPhase: RunPhase.scramble,
-          currentActionBadge: 'SPRINT',
-          passivePoints: 0,
-        );
+    _time += dt;
+    if (!state.photoMode) sim.step(dt);
+    final c = state.callout;
+    if (c != null && c.id != _lastCalloutId) {
+      _lastCalloutId = c.id;
+      if (c.accent == CalloutAccent.danger) {
+        soundFx.playCrash();
       } else {
-        state.updateFrame(
-          dt: dt,
-          currentSpeedKmh: 0.0,
-          currentDistanceMeters: 0.0,
-          currentPhase: RunPhase.skyDrop,
-          currentActionBadge: 'SKY DROP',
-          passivePoints: 0,
-        );
-      }
-      return;
-    }
-
-    // Active running phases
-    if (boostTimer > 0) {
-      boostTimer = (boostTimer - dt).clamp(0.0, 3.0);
-    }
-    if (slideTimer > 0) {
-      slideTimer = (slideTimer - dt).clamp(0.0, 1.0);
-    }
-
-    final dist = (-playerZ).clamp(0.0, GameState.totalRouteMeters);
-    final baseSpeed = 28.0 + (dist / GameState.totalRouteMeters) * 12.0;
-    final targetSpeed = baseSpeed + (boostTimer > 0 ? 9.5 : 0.0);
-    forwardSpeed += (targetSpeed - forwardSpeed) * (dt * 4.5).clamp(0.0, 1.0);
-
-    // Optional Auto-Pilot steering (matches video Auto-Pilot button)
-    if (state.autoPilotEnabled) {
-      _runAutoPilot();
-    }
-
-    // Advance Pegman forward (-Z)
-    playerZ -= forwardSpeed * dt;
-    final newDist = (-playerZ).clamp(0.0, GameState.totalRouteMeters);
-
-    // Smooth lane lateral movement
-    final desiredX = laneX[targetLane];
-    final prevX = playerX;
-    playerX += (desiredX - playerX) * (dt * 14.0).clamp(0.0, 1.0);
-    playerVelX = (playerX - prevX) / (dt > 0.0001 ? dt : 0.016);
-
-    // Vertical gravity & track elevation
-    final groundY = _trackElevationAtZ(playerZ);
-    playerVelY -= 32.0 * dt;
-    playerY += playerVelY * dt;
-    if (playerY <= groundY) {
-      playerY = groundY;
-      playerVelY = 0.0;
-    }
-
-    // Determine active phase & special mechanics
-    final RunPhase phase;
-    if (newDist < GameState.scrambleEndMeters) {
-      phase = RunPhase.scramble;
-    } else if (newDist < GameState.yamanoteEndMeters) {
-      phase = RunPhase.yamanote;
-    } else if (newDist < GameState.totalRouteMeters) {
-      phase = RunPhase.meijiDori;
-    } else {
-      phase = RunPhase.finale;
-    }
-
-    final isJumping = playerY > groundY + 0.25;
-    final isSliding = slideTimer > 0 && !isJumping;
-    final isOnYamanote = phase == RunPhase.yamanote;
-    final isOnSideRail = !isOnYamanote &&
-        ((newDist > 110 && newDist < 170 && targetLane == 0) ||
-            (newDist > 205 && newDist < 275 && targetLane == 2) ||
-            (newDist > 665 && newDist < 745 && targetLane == 0) ||
-            (newDist > 770 && newDist < 840 && targetLane == 2));
-    final isWallRunning = !isOnYamanote &&
-        ((newDist > 118 && newDist < 162 && targetLane == 2) ||
-            (newDist > 212 && newDist < 268 && targetLane == 0) ||
-            (newDist > 672 && newDist < 738 && targetLane == 2));
-
-    if (_wasWallRunning && isOnSideRail) {
-      state.recordWallToRail();
-      soundFx.playBoostRing();
-    }
-    _wasWallRunning = isWallRunning;
-
-    final isGrinding = isOnYamanote || isOnSideRail;
-    final String badge;
-    if (isSliding) {
-      badge = 'SLIDE';
-    } else if (isJumping) {
-      badge = 'JUMP';
-    } else if (isWallRunning) {
-      badge = 'WALL RUN';
-    } else if (isGrinding) {
-      badge = 'RAIL GRIND';
-    } else {
-      badge = 'SPRINT';
-    }
-
-    // Update roadside neon signs — ignite as Pegman passes
-    for (final s in _signs) {
-      if (!s.ignited && (s.z - playerZ).abs() < 12.0) {
-        s.ignited = true;
-        s.material.emissiveFactor = _scaleRgb(s.baseEmissive, 1.45);
-        state.recordSignLit();
-      }
-    }
-
-    // Spin & check octagonal Boost Rings
-    for (final r in _boostRings) {
-      if (r.collected) continue;
-      r.node.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), _totalTime * 1.8);
-      if ((r.z - playerZ).abs() < 2.2 && (laneX[r.lane] - playerX).abs() < 1.8) {
-        r.collected = true;
-        r.node.visible = false;
-        boostTimer = 2.0;
-        state.recordBoostRing();
         soundFx.playBoostRing();
       }
     }
+    _syncProps();
+    _syncHero(dt);
+    _computeCamera(dt);
+    _syncRain(dt);
+    state.tick(state.photoMode ? 0 : dt);
+  }
 
-    // Move traffic & check collisions / Tokyo Drift Near Misses
-    for (final obs in _obstacles) {
-      if (obs.speedZ > 0 && (obs.z - playerZ).abs() < 140.0) {
-        obs.z += obs.speedZ * dt;
-        obs.node.position = vm.Vector3(laneX[obs.lane], obs.baseY, obs.z);
-      }
-
-      final dz = (obs.z - playerZ).abs();
-      final dx = (laneX[obs.lane] - playerX).abs();
-
-      // Check collision
-      if (dz < obs.halfLength + 0.45 && dx < obs.halfWidth + 0.35) {
-        final clearHeight = obs.baseY + obs.height;
-        if (playerY + 0.15 < clearHeight) {
-          if (state.autoPilotEnabled) {
-            // Auto-pilot vaults cleanly over any late obstacle
-            playerVelY = 12.6;
-          } else {
-            shakeTimer = 0.45;
-            soundFx.playCrash();
-            state.triggerGameOver(
-              obs.kind == ObstacleKind.barrier
-                  ? 'Clipped a Yamanote viaduct barrier'
-                  : 'Collided with Shibuya traffic',
-            );
-            return;
-          }
-        }
-      } else if (!obs.nearMissAwarded &&
-          obs.z > playerZ + 0.8 &&
-          obs.z < playerZ + 5.5 &&
-          dx < 3.4) {
-        obs.nearMissAwarded = true;
-        state.recordNearMiss(tokyoDrift: obs.kind == ObstacleKind.jdmCar);
+  void _syncProps() {
+    for (int i = 0; i < world.rings.length; i++) {
+      world.rings[i].node.visible = !sim.ringHit[i];
+    }
+    for (int i = 0; i < world.pinGates.length; i++) {
+      final lit = sim.gateLit[i];
+      if (world.pinGates[i].lit != lit || lit) {
+        world.pinGates[i].setLit(lit, 0.85 + 0.15 * math.sin(_time * 6));
       }
     }
+    for (int i = 0; i < world.slidePortals.length; i++) {
+      final lit = sim.portalDone[i];
+      if (world.slidePortals[i].lit != lit) world.slidePortals[i].setLit(lit);
+    }
+    for (int i = 0; i < 6; i++) {
+      final l = world.googleLetters[i];
+      if (state.googleLettersLit[i]) {
+        final k = 0.85 + 0.15 * math.sin(_time * 5 + i);
+        l.material.emissiveFactor = vm.Vector4(
+            l.baseEmissive.x * k, l.baseEmissive.y * k, l.baseEmissive.z * k, 1);
+      }
+    }
+    final pulse = 1.6 + 1.2 * (0.5 + 0.5 * math.sin(_time * 3.2));
+    world.beaconMat.emissiveFactor = hexColor('#EA4335', pulse);
+    for (final s in world.bladeSigns) {
+      s.setLit(true, 0.82 + 0.18 * math.sin(_time * 2.4 + s.baseEmissive.x * 3));
+    }
+    for (int i = 0; i < sim.taxis.length; i++) {
+      final t = sim.taxis[i];
+      final n = _taxiNodes[i];
+      n.visible = t.active;
+      n.position = w3(t.x, t.y, t.z);
+      n.rotation = yawQuat(mirrorYaw(t.yaw));
+    }
+    for (int i = 0; i < sim.drift.length; i++) {
+      final c = sim.drift[i];
+      final n = _driftNodes[i];
+      n.position = w3(c.x, 0, c.z);
+      n.rotation = yawQuat(mirrorYaw(c.yaw));
+    }
+  }
 
-    // Victory check at Shibuya Stream – Google Tokyo
-    if (newDist >= GameState.totalRouteMeters) {
-      soundFx.playVictory();
-      state.triggerVictory();
+  void _syncHero(double dt) {
+    PegmanPose pose;
+    switch (sim.move) {
+      case SimMove.skyDrop:
+        pose = sim.grounded ? PegmanPose.run : PegmanPose.skyDrop;
+      case SimMove.sprint:
+        pose = PegmanPose.run;
+      case SimMove.stumble:
+        pose = PegmanPose.stumble;
+      case SimMove.vault:
+      case SimMove.pinBeacon:
+        pose = sim.flipStyle != 'none' ? PegmanPose.flip : PegmanPose.jump;
+        if (sim.move == SimMove.pinBeacon && sim.grounded) pose = PegmanPose.run;
+      case SimMove.slide:
+        pose = PegmanPose.slide;
+      case SimMove.railGrind:
+        pose = PegmanPose.grind;
+      case SimMove.wallRun:
+        pose = PegmanPose.wallRun;
+      case SimMove.finaleOrbit:
+        pose = PegmanPose.dance;
+    }
+    final visible =
+        state.phase != AppPhase.mapsTitle && state.phase != AppPhase.loading;
+    pegman.root.visible = visible;
+    pegman.update(
+      dt: state.photoMode ? 0 : dt,
+      position: w3(sim.x, sim.y, sim.z),
+      yaw: mirrorYaw(sim.yaw),
+      pose: pose,
+      speed: sim.speed,
+      flipPhase: sim.flipPhase,
+      bank: -sim.bank,
+      time: _time,
+      showTrail: visible &&
+          state.phase == AppPhase.playing &&
+          (state.overchargeRatio > 0.3 || sim.activeRail >= 0),
+    );
+  }
+
+  void _syncRain(double dt) {
+    final c = w3(camPos.x, camPos.y, camPos.z);
+    final visible = state.phase != AppPhase.mapsTitle &&
+        state.phase != AppPhase.loading &&
+        camPos.y < 120;
+    for (final n in _rain) {
+      n.visible = visible;
+      if (!visible) continue;
+      var p = n.position;
+      p.y -= dt * 26;
+      if (p.y < c.y - 14 || (p - c).length > 34) {
+        p = vm.Vector3(c.x + (_rng.nextDouble() - 0.5) * 50,
+            c.y + 4 + _rng.nextDouble() * 18, c.z + (_rng.nextDouble() - 0.5) * 50);
+      }
+      n.position = p;
+    }
+  }
+
+  // ------------------------------------------------------------- camera
+  void _spring(vm.Vector3 pos, vm.Vector3 vel, vm.Vector3 target, double dt) {
+    const w = 13.5, zeta = 0.94;
+    final n = 1 + 2 * zeta * w * dt;
+    final r = w * w * dt;
+    final i = dt * r;
+    final inv = 1 / (n + i);
+    for (int k = 0; k < 3; k++) {
+      final x = (n * pos[k] + dt * vel[k] + i * target[k]) * inv;
+      vel[k] = (vel[k] + r * (target[k] - x)) / n;
+      pos[k] = x;
+    }
+  }
+
+  static double _qs(double x) {
+    final q = _clamp(x, 0, 1);
+    return q * q * q * (q * (6 * q - 15) + 10);
+  }
+
+  static double _sStep(double e0, double e1, double x) {
+    final q = _clamp((x - e0) / (e1 - e0), 0, 1);
+    return q * q * (3 - 2 * q);
+  }
+
+  void _computeCamera(double dt) {
+    final h = sim;
+    final t = _time;
+    final shake = sim.trauma * sim.trauma;
+    final sx = math.sin(t * 37.1) * 0.42 * shake;
+    final sy = math.sin(t * 41.7 + 1.3) * 0.34 * shake;
+    final shakeRoll = math.sin(t * 29.3 + 0.7) * 0.048 * shake;
+
+    if (state.photoMode) {
+      _photoCamera();
       return;
     }
+    if (state.phase == AppPhase.loading || state.phase == AppPhase.mapsTitle) {
+      camPos.setValues(68, 435, 68);
+      camTarget.setValues(68, 0, 68);
+      camUp = vm.Vector3(0, 0, -1);
+      camFov = 54;
+      camRoll = 0;
+      _springPos.setFrom(camPos);
+      _springTgt.setFrom(camTarget);
+      _camInit = true;
+      return;
+    }
+    if (state.phase == AppPhase.finale) {
+      final r = sim.rooftop;
+      final face = ((level.meta['googleTower'] as Map<String, dynamic>)['facingYaw'] as num)
+          .toDouble();
+      final a = face + math.sin(t * 0.28) * 0.34;
+      final o = 15.5 + math.cos(t * 0.28) * 1.4;
+      final yy = r.y + 2.8 + math.sin(t * 0.42) * 0.45;
+      sim.yaw = face + math.sin(t * 0.28) * 0.16;
+      camPos.setValues(r.x + math.sin(a) * o + sx, yy + sy, r.z + math.cos(a) * o);
+      camTarget.setValues(
+          r.x - math.sin(face) * 1.2, r.y + 2.15, r.z - math.cos(face) * 1.2);
+      camFov = 52;
+      camRoll = shakeRoll;
+      camUp = vm.Vector3(0, 1, 0);
+      return;
+    }
+    final now = sim.spline.sample(h.s);
+    final c = _clamp((h.speed - 22) / 22, 0, 1);
+    final l = _lerp(4.5, 5.4, c);
+    final u = h.move == SimMove.slide
+        ? 1.56
+        : (h.activeTransfer >= 0 ? 2.28 : _lerp(2.05, 2.38, c));
+    final d = _lerp(13, 20, c);
+    final f = sim.spline.sample(h.s + d);
+    var px = h.x - now.tx * l + now.rx * (h.lateral * -0.18);
+    var py = h.y + u;
+    var pz = h.z - now.tz * l + now.rz * (h.lateral * -0.18);
+    var gx = f.x + f.rx * (h.lateral * 0.42);
+    var gy = h.y + _clamp((f.y - h.y) * 0.35, -1.4, 1.1) + 1.92;
+    var gz = f.z + f.rz * (h.lateral * 0.42);
+    var fov = 58 + c * 18;
+    if (h.activeRail >= 0 || h.activeWall >= 0 || h.activeTransfer >= 0) {
+      fov = math.max(fov, 70 + state.overchargeRatio * 8);
+    }
+    if (state.overchargeRatio > 0.05) {
+      fov = math.max(fov, _lerp(68, 78, state.overchargeRatio));
+    }
+    fov = _clamp(fov, 56, 78);
+    final launch = level.route['heroGoogleLaunch'] as Map<String, dynamic>;
+    final trig = (launch['triggerS'] as num).toDouble();
+    final fly = _sStep(trig - 8, trig + 14, h.s) *
+        (1 - _sStep(sim.spline.length - 12, sim.spline.length + 2, h.s));
+    if (fly > 0.001) {
+      final sc = (level.meta['googleTower'] as Map<String, dynamic>)['signCenter']
+          as List<dynamic>;
+      px += now.rx * (-3.4 * fly) - now.tx * (1.8 * fly);
+      py += -0.35 * fly;
+      pz += now.rz * (-3.4 * fly) - now.tz * (1.8 * fly);
+      gx = _lerp(gx, (sc[0] as num).toDouble(), 0.5 * fly);
+      gy = _lerp(gy, (sc[1] as num).toDouble() + 3.2, 0.5 * fly);
+      gz = _lerp(gz, (sc[2] as num).toDouble(), 0.5 * fly);
+      fov = _lerp(fov, 68, fly * 0.65);
+    }
 
-    final displayY = isOnSideRail && !isJumping ? groundY + 1.65 : playerY;
-    pegman.updatePose(
-      dt: dt,
-      worldPosition: vm.Vector3(playerX, displayY, playerZ),
-      laneVelocityX: playerVelX,
-      isSkyDrop: false,
-      isSliding: isSliding,
-      isJumping: isJumping,
-      isGrinding: isGrinding,
-      isWallRunning: isWallRunning,
-      isVictory: false,
-      wallSide: targetLane == 0 ? -1.0 : 1.0,
-      speedRatio: ((forwardSpeed - 24.0) / 24.0).clamp(0.0, 1.0),
-      time: _totalTime,
-    );
-
-    final speedKmh = forwardSpeed * 3.6;
-    final passivePts = (dt * (isGrinding || isWallRunning ? 140 : 65) * state.combo).round();
-    state.updateFrame(
-      dt: dt,
-      currentSpeedKmh: speedKmh,
-      currentDistanceMeters: newDist,
-      currentPhase: phase,
-      currentActionBadge: badge,
-      passivePoints: passivePts,
-    );
+    final w = sim.dropClock;
+    if (state.phase == AppPhase.skyDrop || w < 3.5) {
+      double nx, ny, nz, ox, oy, oz, upY = 1, upZ = 0, fv = 60;
+      if (w < 0.9) {
+        final e = _qs(w / 0.9);
+        nx = _lerp(68, h.x - now.tx * 9.5, e);
+        ny = _lerp(435, 285, e);
+        nz = _lerp(68, h.z - now.tz * 9.5, e);
+        ox = _lerp(68, h.x + now.tx * 12, e);
+        oy = _lerp(0, math.max(0, h.y - 45), e);
+        oz = _lerp(68, h.z + now.tz * 12, e);
+        final p = e, m = e - 1;
+        final hh = math.max(1e-4, math.sqrt(p * p + m * m));
+        upY = p / hh;
+        upZ = m / hh;
+        fv = _lerp(54, 66, e);
+      } else if (w < 3.05) {
+        final e = _clamp((w - 0.9) / 2.15, 0, 1);
+        final dd = _qs(e);
+        final back = _lerp(9.5, l + 1.1, dd);
+        final up = _lerp(13, u + 1.6, dd);
+        nx = h.x - now.tx * back;
+        ny = h.y + up;
+        nz = h.z - now.tz * back;
+        final m = _qs(_clamp((e - 0.65) / 0.35, 0, 1));
+        final hx = h.x + now.tx * _lerp(12, 10, dd);
+        final hy = math.max(0.5, h.y - _lerp(45, 1.5, dd));
+        final hz = h.z + now.tz * _lerp(12, 10, dd);
+        ox = _lerp(hx, gx, m);
+        oy = _lerp(hy, gy, m);
+        oz = _lerp(hz, gz, m);
+        fv = _lerp(66, 74, math.sin(e * math.pi));
+      } else {
+        final e = _qs(_clamp((w - 3.05) / 0.45, 0, 1));
+        nx = _lerp(h.x - now.tx * (l + 1.1), px, e);
+        ny = _lerp(h.y + u + 1.6, py, e);
+        nz = _lerp(h.z - now.tz * (l + 1.1), pz, e);
+        ox = _lerp(h.x + now.tx * 10, gx, e);
+        oy = _lerp(h.y + 1.1, gy, e);
+        oz = _lerp(h.z + now.tz * 10, gz, e);
+        fv = _lerp(66, fov, e);
+      }
+      final inv = 1 / math.max(dt, 1e-4);
+      if (_camInit) {
+        _springVel.setValues((nx - _springPos.x) * inv,
+            (ny - _springPos.y) * inv, (nz - _springPos.z) * inv);
+        _springTgtVel.setValues((ox - _springTgt.x) * inv,
+            (oy - _springTgt.y) * inv, (oz - _springTgt.z) * inv);
+      }
+      _springPos.setValues(nx, ny, nz);
+      _springTgt.setValues(ox, oy, oz);
+      camPos.setValues(nx + sx, ny + sy, nz);
+      camTarget.setValues(ox, oy, oz);
+      camFov = fv;
+      camRoll = shakeRoll;
+      camUp = vm.Vector3(0, upY, upZ);
+      _camInit = true;
+      return;
+    }
+    if (!_camInit) {
+      _springPos.setValues(px, py, pz);
+      _springTgt.setValues(gx, gy, gz);
+      _camInit = true;
+    } else {
+      _spring(_springPos, _springVel, vm.Vector3(px, py, pz), dt);
+      _spring(_springTgt, _springTgtVel, vm.Vector3(gx, gy, gz), dt);
+    }
+    final bob = 0.022 * math.sin(t * 2.1);
+    camPos.setValues(_springPos.x + sx, _springPos.y + bob + sy, _springPos.z);
+    camTarget.setFrom(_springTgt);
+    camFov = _lerp(camFov, fov, 0.14);
+    camRoll = _lerp(camRoll, -sim.bank * 0.24 + shakeRoll, 0.18);
+    camUp = vm.Vector3(0, 1, 0);
   }
 
-  void _runAutoPilot() {
-    // Look ahead for obstacles in our current lane
-    for (final obs in _obstacles) {
-      final ahead = playerZ - obs.z; // positive when obs is in front
-      if (ahead > 4.0 && ahead < 24.0 && obs.lane == targetLane) {
-        if (obs.kind == ObstacleKind.barrier) {
-          jump();
-        } else {
-          // Pick a safe adjacent lane
-          final candidates = [0, 1, 2]..remove(targetLane);
-          candidates.sort((a, b) => (a - targetLane).abs().compareTo((b - targetLane).abs()));
-          targetLane = candidates.first;
-        }
-        return;
-      }
+  void _photoCamera() {
+    vm.Vector3 pos, tgt;
+    double fov;
+    switch (state.photoPreset) {
+      case PhotoPreset.scramble:
+        pos = vm.Vector3(-72, 26, 22);
+        tgt = vm.Vector3(-10, 4.5, -18);
+        fov = 54;
+      case PhotoPreset.skyline:
+        final gt = level.meta['googleTower'] as Map<String, dynamic>;
+        final e = gt['signCenter'] as List<dynamic>;
+        final yaw = (gt['facingYaw'] as num).toDouble();
+        pos = vm.Vector3((e[0] as num).toDouble() + math.sin(yaw - 0.12) * 38,
+            29, (e[2] as num).toDouble() + math.cos(yaw - 0.12) * 38);
+        tgt = vm.Vector3(253, 24.5, 236);
+        fov = 54;
+      case PhotoPreset.hero:
+        final n = sim.yaw + 0.62;
+        pos = vm.Vector3(sim.x - math.sin(n) * 4.4, sim.y + 1.85,
+            sim.z - math.cos(n) * 4.4);
+        tgt = vm.Vector3(sim.x, sim.y + 1.15, sim.z);
+        fov = 50;
     }
-
-    // Steer toward upcoming Boost Rings when lane is clear
-    for (final ring in _boostRings) {
-      if (ring.collected) continue;
-      final ahead = playerZ - ring.z;
-      if (ahead > 6.0 && ahead < 28.0) {
-        targetLane = ring.lane;
-        return;
-      }
-    }
+    final off = (pos - tgt) * photoZoom;
+    final ca = math.cos(photoOrbit), sa = math.sin(photoOrbit);
+    final rx = off.x * ca - off.z * sa, rz = off.x * sa + off.z * ca;
+    camPos.setValues(tgt.x + rx, tgt.y + off.y, tgt.z + rz);
+    camTarget.setFrom(tgt);
+    camFov = fov;
+    camUp = vm.Vector3(0, 1, 0);
+    camRoll = 0;
   }
 
-  fs.PerspectiveCamera buildCamera(Duration elapsed) {
-    if (state.screen == GameScreen.victory) {
-      const stageZ = -GameState.totalRouteMeters;
-      const stageY = 6.2;
-      final angle = state.photoMode ? photoOrbitAngle : math.sin(_totalTime * 0.45) * 0.16;
-      const radius = 11.5;
-      return fs.PerspectiveCamera(
-        position: vm.Vector3(
-          math.sin(angle) * radius,
-          stageY + 3.4,
-          stageZ + math.cos(angle) * radius,
-        ),
-        target: vm.Vector3(0, stageY + 2.6, stageZ - 2.5),
-        fovRadiansY: 0.92,
-      );
+  fs.Camera buildCamera(Duration elapsed) {
+    final pos = w3(camPos.x, camPos.y, camPos.z);
+    final tgt = w3(camTarget.x, camTarget.y, camTarget.z);
+    var up = vm.Vector3(camUp.x, camUp.y, -camUp.z);
+    if (camRoll.abs() > 1e-4) {
+      final fwd = (tgt - pos).normalized();
+      up = vm.Quaternion.axisAngle(fwd, camRoll).rotated(up);
     }
-
-    if (state.screen == GameScreen.mapOverview || state.phase == RunPhase.skyDrop) {
-      // Smooth aerial descent from high above Shibuya Scramble Crossing into chase view
-      final t = state.screen == GameScreen.mapOverview ? 0.0 : skyDropProgress;
-      final eased = 1.0 - math.pow(1.0 - t, 2.5).toDouble();
-      final camY = 58.0 * (1.0 - eased) + 4.8 * eased;
-      final camZ = playerZ + 14.0 * (1.0 - eased) + 8.5 * eased;
-      final lookY = playerY * (1.0 - eased) + 2.0 * eased;
-      final lookZ = playerZ - 14.0 * eased;
-      return fs.PerspectiveCamera(
-        position: vm.Vector3(playerX * 0.4, camY, camZ),
-        target: vm.Vector3(playerX * 0.4, lookY, lookZ),
-        fovRadiansY: 0.98,
-      );
-    }
-
-    final shakeX = shakeTimer > 0 ? math.sin(_totalTime * 55.0) * 0.35 * shakeTimer : 0.0;
-    final shakeY = shakeTimer > 0 ? math.cos(_totalTime * 48.0) * 0.25 * shakeTimer : 0.0;
-    final fovBoost = boostTimer > 0 ? 0.14 : 0.0;
-
     return fs.PerspectiveCamera(
-      position: vm.Vector3(
-        playerX * 0.72 + shakeX,
-        playerY + 4.4 + shakeY,
-        playerZ + 8.6,
-      ),
-      target: vm.Vector3(
-        playerX * 0.55,
-        playerY + 1.8,
-        playerZ - 16.0,
-      ),
-      fovRadiansY: 1.02 + fovBoost,
+      fovRadiansY: camFov * vm.degrees2Radians,
+      position: pos,
+      target: tgt,
+      up: up,
+      fovNear: 0.15,
+      fovFar: 2500,
     );
   }
 
-  void dispose() {
-    scene.dispose();
-  }
+  void dispose() {}
 }

@@ -3,284 +3,222 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart' as fs;
 import 'package:vector_math/vector_math.dart' as vm;
 
-import 'neon_palette.dart';
+import 'world_builder.dart' show hexColor, pbr;
 
-/// Procedural 3D Street View Pegman built from Flutter Scene primitives,
-/// complete with animated limbs, sky-drop vertical plasma beam, and trailing
-/// neon ribbon segments + spark particles.
+/// Pose inputs for [PegmanRig.update], mirroring the web demo's hero moves.
+enum PegmanPose { skyDrop, run, jump, flip, slide, wallRun, grind, stumble, dance }
+
+/// Procedural 1.72 m Street View Pegman (marigold body, terracotta collar,
+/// orange chest V) with jointed arms/legs, following the proportions of the
+/// demo's `Rf` rig spec.
 class PegmanRig {
   PegmanRig() {
-    _buildPegman();
-    _buildTrail();
-    _buildSparks();
-  }
+    final body = pbr(hexColor('#FDBF2D'),
+        emissive: hexColor('#FDBF2D', 0.22), roughness: 0.45);
+    final collar = pbr(hexColor('#CE592C'), emissive: hexColor('#CE592C', 0.15));
+    final chest = pbr(hexColor('#E3812D'), emissive: hexColor('#E3812D', 0.2));
 
-  final fs.Node root = fs.Node(name: 'pegman_root');
-  final fs.Node bodyPivot = fs.Node(name: 'pegman_body_pivot');
-  late final fs.Node leftArm;
-  late final fs.Node rightArm;
-  late final fs.Node leftLeg;
-  late final fs.Node rightLeg;
-  late final fs.Node skyBeam;
+    root.add(flip);
+    flip.position = vm.Vector3(0, 0.84, 0);
+    flip.add(pelvis);
+    pelvis.position = vm.Vector3(0, -0.2, 0);
 
-  final List<fs.Node> trailSegments = [];
-  final List<vm.Vector3> _trailHistory = [];
-  final List<fs.Node> sparkNodes = [];
-
-  static const int trailCount = 22;
-  static const int sparkCount = 12;
-
-  double _runCycle = 0.0;
-
-  void _buildPegman() {
-    final pegmanMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = NeonPalette.pegmanBase
-      ..metallicFactor = 0.08
-      ..roughnessFactor = 0.28
-      ..emissiveFactor = NeonPalette.emissivePegman;
-
-    // Iconic round Pegman head
-    final head = fs.Node(
-      name: 'pegman_head',
-      mesh: fs.Mesh(fs.SphereGeometry(radius: 0.34), pegmanMat),
-    )..position = vm.Vector3(0, 1.56, 0);
-
-    // Chunky rounded-silhouette torso
     final torso = fs.Node(
-      name: 'pegman_torso',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.62, 0.70, 0.36)), pegmanMat),
-    )..position = vm.Vector3(0, 0.96, 0);
+        mesh: fs.Mesh(fs.CapsuleGeometry(radius: 0.2, height: 0.36), body))
+      ..position = vm.Vector3(0, 0.3, 0);
+    final collarN = fs.Node(
+        mesh: fs.Mesh(fs.CylinderGeometry(topRadius: 0.13, bottomRadius: 0.16, height: 0.06), collar))
+      ..position = vm.Vector3(0, 0.5, 0);
+    final chestV = fs.Node(
+        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.16, 0.16, 0.04)), chest))
+      ..position = vm.Vector3(0, 0.36, 0.19)
+      ..rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), math.pi / 4);
+    final head = fs.Node(
+        mesh: fs.Mesh(fs.SphereGeometry(radius: 0.17), body))
+      ..position = vm.Vector3(0, 0.72, 0);
+    pelvis.addAll([torso, collarN, chestV, head]);
 
-    // Arms
-    leftArm = fs.Node(
-      name: 'pegman_left_arm',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.20, 0.62, 0.22)), pegmanMat),
-    )..position = vm.Vector3(-0.44, 0.96, 0);
+    fs.Node limb(double len, double r) => fs.Node(
+        mesh: fs.Mesh(fs.CapsuleGeometry(radius: r, height: len), body))
+      ..position = vm.Vector3(0, -len / 2, 0);
 
-    rightArm = fs.Node(
-      name: 'pegman_right_arm',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.20, 0.62, 0.22)), pegmanMat),
-    )..position = vm.Vector3(0.44, 0.96, 0);
+    for (final side in [-1.0, 1.0]) {
+      final hip = fs.Node()..position = vm.Vector3(0.123 * side, 0.02, 0);
+      final knee = fs.Node()..position = vm.Vector3(0, -0.29, 0);
+      hip.add(limb(0.24, 0.075));
+      knee.add(limb(0.22, 0.068));
+      hip.add(knee);
+      pelvis.add(hip);
+      final shoulder = fs.Node()..position = vm.Vector3(0.232 * side, 0.42, 0);
+      final elbow = fs.Node()..position = vm.Vector3(0.0, -0.25, 0);
+      shoulder.add(limb(0.2, 0.058));
+      elbow.add(limb(0.2, 0.052));
+      shoulder.add(elbow);
+      pelvis.add(shoulder);
+      if (side < 0) {
+        hipL = hip;
+        kneeL = knee;
+        shoulderL = shoulder;
+        elbowL = elbow;
+      } else {
+        hipR = hip;
+        kneeR = knee;
+        shoulderR = shoulder;
+        elbowR = elbow;
+      }
+    }
 
-    // Legs
-    leftLeg = fs.Node(
-      name: 'pegman_left_leg',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.24, 0.62, 0.26)), pegmanMat),
-    )..position = vm.Vector3(-0.17, 0.32, 0);
-
-    rightLeg = fs.Node(
-      name: 'pegman_right_leg',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.24, 0.62, 0.26)), pegmanMat),
-    )..position = vm.Vector3(0.17, 0.32, 0);
-
-    // Vertical plasma drop beam visible during SKY DROP
-    final beamMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.35, 0.25, 0.85)
-      ..metallicFactor = 0.0
-      ..roughnessFactor = 1.0
-      ..alphaMode = fs.AlphaMode.blend
-      ..emissiveFactor = vm.Vector4(3.2, 0.45, 0.35, 1.0);
-
-    skyBeam = fs.Node(
-      name: 'sky_drop_beam',
-      mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.32, 26.0, 0.32)), beamMat),
-    )..position = vm.Vector3(0, 14.5, 0);
-
-    bodyPivot.addAll([head, torso, leftArm, rightArm, leftLeg, rightLeg]);
-    root.addAll([bodyPivot, skyBeam]);
-  }
-
-  void _buildTrail() {
-    for (int i = 0; i < trailCount; i++) {
-      final t = i / trailCount;
-      // Blend from bright warm white-pink near Pegman to magenta-orange tail
-      final mat = fs.PhysicallyBasedMaterial()
-        ..baseColorFactor = vm.Vector4(1.0, 0.55 - t * 0.35, 0.78 - t * 0.3, 0.85 * (1.0 - t))
-        ..metallicFactor = 0.0
-        ..roughnessFactor = 1.0
-        ..alphaMode = fs.AlphaMode.blend
-        ..emissiveFactor = vm.Vector4(
-          3.0 * (1.0 - t * 0.55),
-          (1.2 - t * 0.9).clamp(0.15, 2.0),
-          (2.2 - t * 1.1).clamp(0.2, 2.6),
-          1.0,
-        );
-
-      final width = (0.34 * (1.0 - t * 0.65)).clamp(0.08, 0.4);
-      final node = fs.Node(
-        name: 'trail_$i',
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(width, 0.08, 0.95)), mat),
-      )..visible = false;
-      trailSegments.add(node);
+    // Magenta plasma trail ribbon segments (sky drop / high speed).
+    final trailMat = pbr(hexColor('#FF2A9D', 0.5, 0.8),
+        emissive: hexColor('#FF2A9D', 2.6))
+      ..alphaMode = fs.AlphaMode.blend;
+    for (int i = 0; i < 14; i++) {
+      final n = fs.Node(
+          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.18, 0.18, 1.0)), trailMat))
+        ..visible = false;
+      trail.add(n);
     }
   }
 
-  void _buildSparks() {
-    final sparkMat = fs.PhysicallyBasedMaterial()
-      ..baseColorFactor = vm.Vector4(1.0, 0.92, 0.45, 1.0)
-      ..metallicFactor = 0.0
-      ..roughnessFactor = 0.5
-      ..emissiveFactor = vm.Vector4(3.6, 2.4, 0.55, 1.0);
+  final fs.Node root = fs.Node(name: 'pegman');
+  final fs.Node flip = fs.Node(name: 'pegman_flip');
+  final fs.Node pelvis = fs.Node(name: 'pegman_pelvis');
+  late final fs.Node hipL, hipR, kneeL, kneeR, shoulderL, shoulderR, elbowL, elbowR;
+  final List<fs.Node> trail = [];
+  final List<vm.Vector3> _history = [];
+  double _gait = 0;
 
-    for (int i = 0; i < sparkCount; i++) {
-      final node = fs.Node(
-        name: 'spark_$i',
-        mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.08, 0.08, 0.45)), sparkMat),
-      )..visible = false;
-      sparkNodes.add(node);
+  void attach(fs.Node parent) {
+    parent.add(root);
+    for (final t in trail) {
+      parent.add(t);
     }
   }
 
-  void attachToScene(fs.Scene scene) {
-    scene.add(root);
-    scene.addAll(trailSegments);
-    scene.addAll(sparkNodes);
-  }
+  static vm.Quaternion _rx(double a) =>
+      vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), a);
+  static vm.Quaternion _rz(double a) =>
+      vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), a);
 
-  void resetTrail(vm.Vector3 startPos) {
-    _trailHistory
-      ..clear()
-      ..addAll(List.generate(trailCount, (_) => startPos.clone()));
-    for (final seg in trailSegments) {
-      seg.visible = false;
-    }
-    for (final s in sparkNodes) {
-      s.visible = false;
-    }
-  }
-
-  void updatePose({
+  /// [position] in Flutter Scene world space; [yaw] already mirrored.
+  void update({
     required double dt,
-    required vm.Vector3 worldPosition,
-    required double laneVelocityX,
-    required bool isSkyDrop,
-    required bool isSliding,
-    required bool isJumping,
-    required bool isGrinding,
-    required bool isWallRunning,
-    required bool isVictory,
-    required double wallSide,
-    required double speedRatio,
-    required double time,
+    required vm.Vector3 position,
+    required double yaw,
+    required PegmanPose pose,
+    double speed = 0,
+    double flipPhase = 0,
+    double bank = 0,
+    double time = 0,
+    bool showTrail = false,
   }) {
-    root.position = worldPosition;
-    skyBeam.visible = isSkyDrop;
-
-    // Record ribbon trail
-    if (_trailHistory.isEmpty) {
-      resetTrail(worldPosition);
+    root.position = position;
+    root.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), yaw);
+    _gait += dt * math.max(speed, 4) / 2.2 * math.pi * 2;
+    final g = math.sin(_gait);
+    double lean = 0, legSwing = 0, armSwing = 0, kneeBend = 0, flipA = 0;
+    double armSpread = 0.12, pelvisY = -0.2, roll = bank;
+    switch (pose) {
+      case PegmanPose.run:
+      case PegmanPose.stumble:
+        lean = pose == PegmanPose.stumble ? 0.55 : 0.32;
+        legSwing = 0.9 * g;
+        armSwing = -0.8 * g;
+        kneeBend = 0.6 + 0.5 * math.max(0, -g);
+        pelvisY = -0.2 + 0.04 * math.sin(_gait * 2).abs();
+      case PegmanPose.jump:
+        lean = 0.15;
+        legSwing = 0.5;
+        kneeBend = 1.1;
+        armSwing = -0.6;
+        armSpread = 0.5;
+      case PegmanPose.flip:
+        flipA = flipPhase * math.pi * 2;
+        legSwing = 1.2;
+        kneeBend = 1.6;
+        armSwing = 1.2;
+      case PegmanPose.slide:
+        lean = -0.9;
+        legSwing = 1.35;
+        kneeBend = 0.2;
+        armSwing = -0.4;
+        armSpread = 0.7;
+        pelvisY = -0.52;
+      case PegmanPose.wallRun:
+        lean = 0.3;
+        legSwing = 1.0 * g;
+        armSwing = -0.9 * g;
+        kneeBend = 0.7;
+      case PegmanPose.grind:
+        lean = 0.12;
+        legSwing = 0.25;
+        kneeBend = 0.5;
+        armSpread = 1.2;
+        armSwing = 0.1;
+      case PegmanPose.skyDrop:
+        lean = 1.1 + 0.08 * math.sin(time * 6);
+        legSwing = -0.2;
+        kneeBend = 0.4;
+        armSpread = 1.25;
+        armSwing = 0.3;
+      case PegmanPose.dance:
+        final b = math.sin(time * 7);
+        pelvisY = -0.2 + 0.06 * b.abs();
+        legSwing = 0.1 * b;
+        kneeBend = 0.2 + 0.2 * b.abs();
+        armSpread = 0.2;
+        armSwing = 0;
     }
-    _trailHistory.insert(0, worldPosition + vm.Vector3(0, isSkyDrop ? 0.8 : 0.25, 0.35));
-    if (_trailHistory.length > trailCount) {
-      _trailHistory.removeLast();
+    flip.rotation = _rx(flipA + lean * 0.5) * _rz(roll);
+    pelvis.position = vm.Vector3(0, pelvisY, 0);
+    pelvis.rotation = _rx(lean * 0.5);
+    hipL.rotation = _rx(-legSwing);
+    hipR.rotation = _rx(pose == PegmanPose.slide || pose == PegmanPose.jump || pose == PegmanPose.flip || pose == PegmanPose.grind
+        ? -legSwing * 0.6
+        : legSwing);
+    kneeL.rotation = _rx(kneeBend * (pose == PegmanPose.run ? (g > 0 ? 0.4 : 1.0) : 1.0));
+    kneeR.rotation = _rx(kneeBend * (pose == PegmanPose.run ? (g < 0 ? 0.4 : 1.0) : 1.0));
+    if (pose == PegmanPose.dance) {
+      // alternating fist pumps
+      final pump = math.sin(time * 7) > 0;
+      shoulderL.rotation = _rz(-0.3) * _rx(pump ? -2.9 : -1.6);
+      shoulderR.rotation = _rz(0.3) * _rx(pump ? -1.6 : -2.9);
+      elbowL.rotation = _rx(pump ? -0.2 : -1.4);
+      elbowR.rotation = _rx(pump ? -1.4 : -0.2);
+    } else {
+      shoulderL.rotation = _rz(-armSpread) * _rx(armSwing);
+      shoulderR.rotation = _rz(armSpread) * _rx(-armSwing);
+      elbowL.rotation = _rx(-0.9);
+      elbowR.rotation = _rx(-0.9);
     }
 
-    for (int i = 0; i < trailSegments.length; i++) {
-      final seg = trailSegments[i];
-      if (isVictory || i >= _trailHistory.length - 1) {
-        seg.visible = false;
+    // trail
+    _history.insert(0, position.clone()..y += 0.9);
+    if (_history.length > trail.length + 1) _history.removeLast();
+    for (int i = 0; i < trail.length; i++) {
+      final n = trail[i];
+      if (!showTrail || i + 1 >= _history.length) {
+        n.visible = false;
         continue;
       }
-      seg.visible = true;
-      final p0 = _trailHistory[i];
-      final p1 = _trailHistory[i + 1];
-      seg.position = (p0 + p1) * 0.5;
-      final dx = p0.x - p1.x;
-      final dz = p0.z - p1.z;
-      final yaw = math.atan2(dx, dz == 0 ? -0.001 : dz);
-      seg.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), yaw);
-    }
-
-    // Sparks during rail grind, wall run, or boost
-    final showSparks = !isVictory && (isGrinding || isWallRunning);
-    for (int i = 0; i < sparkNodes.length; i++) {
-      final spark = sparkNodes[i];
-      spark.visible = showSparks;
-      if (!showSparks) continue;
-      final phase = (time * 8.0 + i * 0.53) % 1.0;
-      final spreadX = math.sin(i * 2.1 + time * 14.0) * (0.3 + phase * 1.1);
-      final spreadY = (0.1 + phase * 1.2) - phase * phase * 0.9;
-      spark.position = worldPosition +
-          vm.Vector3(
-            spreadX + (isWallRunning ? -wallSide * 0.45 : 0.0),
-            spreadY.clamp(0.05, 1.5),
-            0.4 + phase * 2.6,
-          );
-      spark.rotation = vm.Quaternion.axisAngle(
-        vm.Vector3(0, 1, 0),
-        spreadX * 0.6,
-      );
-    }
-
-    // Body pose animations
-    if (isVictory) {
-      final bounce = (math.sin(time * 6.5).abs()) * 0.25;
-      bodyPivot.position = vm.Vector3(0, bounce, 0);
-      bodyPivot.scale = vm.Vector3.all(1.0);
-      bodyPivot.rotation = vm.Quaternion.axisAngle(
-        vm.Vector3(0, 1, 0),
-        math.pi + math.sin(time * 2.2) * 0.35,
-      );
-      leftArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), -2.4 + math.sin(time * 8) * 0.35);
-      rightArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), 2.4 - math.sin(time * 8) * 0.35);
-      leftLeg.rotation = vm.Quaternion.identity();
-      rightLeg.rotation = vm.Quaternion.identity();
-      return;
-    }
-
-    if (isSkyDrop) {
-      // Classic star-pose descending into Shibuya
-      bodyPivot.position = vm.Vector3(0, 0, 0);
-      bodyPivot.scale = vm.Vector3.all(1.0);
-      bodyPivot.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), math.sin(time * 3.0) * 0.12);
-      leftArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), -1.15);
-      rightArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), 1.15);
-      leftLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), -0.22);
-      rightLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), 0.22);
-      return;
-    }
-
-    _runCycle += dt * (11.0 + speedRatio * 9.0);
-    final bankRoll = (-laneVelocityX * 0.045).clamp(-0.35, 0.35) +
-        (isWallRunning ? wallSide * 0.52 : 0.0);
-
-    if (isSliding) {
-      bodyPivot.position = vm.Vector3(0, -0.34, 0);
-      bodyPivot.scale = vm.Vector3(1.05, 0.56, 1.15);
-      bodyPivot.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), -0.65);
-      leftArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), -0.8);
-      rightArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), 0.8);
-      leftLeg.rotation = vm.Quaternion.identity();
-      rightLeg.rotation = vm.Quaternion.identity();
-    } else if (isGrinding) {
-      bodyPivot.position = vm.Vector3(0, 0.06, 0);
-      bodyPivot.scale = vm.Vector3.all(1.0);
-      bodyPivot.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), 0.35) *
-          vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), bankRoll + math.sin(time * 9) * 0.08);
-      leftArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), -1.25);
-      rightArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), 1.25);
-      leftLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), 0.25);
-      rightLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), -0.25);
-    } else if (isJumping) {
-      bodyPivot.position = vm.Vector3(0, 0.05, 0);
-      bodyPivot.scale = vm.Vector3.all(1.0);
-      bodyPivot.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), 0.22) *
-          vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), bankRoll);
-      leftArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), -1.1);
-      rightArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), -1.1);
-      leftLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), 0.65);
-      rightLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), -0.45);
-    } else {
-      final stride = math.sin(_runCycle);
-      final bob = stride.abs() * 0.10;
-      bodyPivot.position = vm.Vector3(0, bob, 0);
-      bodyPivot.scale = vm.Vector3.all(1.0);
-      bodyPivot.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), 0.16) *
-          vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), bankRoll);
-      leftArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), -stride * 0.9);
-      rightArm.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), stride * 0.9);
-      leftLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), stride * 0.95);
-      rightLeg.rotation = vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), -stride * 0.95);
+      final a = _history[i], b = _history[i + 1];
+      final d = b - a;
+      final len = d.length;
+      if (len < 0.01) {
+        n.visible = false;
+        continue;
+      }
+      n.visible = true;
+      n.position = (a + b) * 0.5;
+      final dir = d / len;
+      final yawT = math.atan2(dir.x, dir.z);
+      final pitch = -math.asin(dir.y.clamp(-1.0, 1.0));
+      final taper = 1.0 - i / trail.length;
+      n.rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), yawT) *
+          vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), pitch);
+      n.scale = vm.Vector3(taper, taper, len);
     }
   }
+
+  void resetTrail() => _history.clear();
 }
