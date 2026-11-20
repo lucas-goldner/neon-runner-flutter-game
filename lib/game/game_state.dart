@@ -1,163 +1,190 @@
 import 'package:flutter/foundation.dart';
 
-enum GameScreen {
-  loading,
-  mapOverview,
-  playing,
-  paused,
-  gameOver,
-  victory,
-}
+/// App phases, mirroring the web demo's `APP_PHASES`
+/// (LOADING → MAPS_TITLE → SKY_DROP → PLAYING → FINALE).
+enum AppPhase { loading, mapsTitle, skyDrop, playing, finale }
 
-enum RunPhase {
+/// Parkour move shown in the HUD move badge (`data-move` in the web demo).
+enum ParkourMove {
   skyDrop('SKY DROP'),
-  scramble('SPRINT'),
-  yamanote('RAIL GRIND'),
-  meijiDori('SPRINT'),
-  finale('FINALE');
+  sprint('SPRINT'),
+  overcharge('OVERCHARGE'),
+  jump('JUMP'),
+  slide('SLIDE'),
+  railGrind('RAIL GRIND'),
+  wallRun('WALL RUN'),
+  roofVault('ROOF VAULT'),
+  neonSlide('NEON SLIDE'),
+  pinBeacon('PIN BEACON'),
+  stumble('STUMBLE'),
+  carDeflect('DEFLECT'),
+  hoodBounce('HOOD BOUNCE'),
+  sideDeflect('SIDE DEFLECT'),
+  finaleOrbit('FINALE');
 
-  const RunPhase(this.defaultBadge);
-  final String defaultBadge;
+  const ParkourMove(this.label);
+  final String label;
 }
 
-class ShibuyaZone {
-  const ShibuyaZone({
-    required this.jpName,
-    required this.enName,
-    required this.startMeters,
-  });
+/// Accent of the bottom-center action callout (`data-accent`).
+enum CalloutAccent { neon, gold, danger, google, vault, neonSlide }
 
-  final String jpName;
-  final String enName;
-  final double startMeters;
+enum PhotoPreset { hero, scramble, skyline }
 
-  String get displayLabel => '$jpName · $enName';
-}
-
-class ToastEvent {
-  ToastEvent({
+class ActionCallout {
+  ActionCallout({
     required this.id,
     required this.label,
-    required this.bonusText,
-    required this.colorValue,
+    required this.bonus,
+    required this.accent,
     required this.createdAt,
+    this.duration = 1.6,
   });
 
   final int id;
   final String label;
-  final String bonusText;
-  final int colorValue;
+
+  /// e.g. `+1,500`; empty string hides the `·` separator and bonus.
+  final String bonus;
+  final CalloutAccent accent;
   final double createdAt;
+  final double duration;
 }
 
+/// One named street segment of the route (minimap header).
+class StreetSegment {
+  const StreetSegment({
+    required this.sStart,
+    required this.sEnd,
+    required this.ja,
+    required this.miniEn,
+    this.shield,
+  });
+
+  final double sStart;
+  final double sEnd;
+  final String ja;
+  final String miniEn;
+  final String? shield;
+
+  /// Minimap header text, e.g. `渋谷スクランブル · Scramble`.
+  String get headerLabel => '$ja · $miniEn';
+}
+
+/// Observable game state shared by the 3D controller and the Flutter HUD.
 class GameState extends ChangeNotifier {
-  static const double totalRouteMeters = 960.0;
-  static const double scrambleEndMeters = 320.0;
-  static const double yamanoteEndMeters = 620.0;
-  static const double meijiEndMeters = 900.0;
+  static const double overchargeKmh = 140.0;
 
-  static const List<ShibuyaZone> zones = [
-    ShibuyaZone(jpName: 'スクランブル交差点', enName: 'Scramble', startMeters: 0),
-    ShibuyaZone(jpName: '道玄坂', enName: 'Dogenzaka', startMeters: 160),
-    ShibuyaZone(jpName: '宮下公園', enName: 'Miyashita Park', startMeters: 280),
-    ShibuyaZone(jpName: '山手線', enName: 'Yamanote Line', startMeters: 340),
-    ShibuyaZone(jpName: '明治通り', enName: 'Meiji-dori', startMeters: 630),
-    ShibuyaZone(jpName: '渋谷ストリーム', enName: 'Google Tokyo', startMeters: 860),
-  ];
-
-  GameScreen screen = GameScreen.loading;
-  RunPhase phase = RunPhase.skyDrop;
-  String actionBadge = 'SKY DROP';
+  AppPhase phase = AppPhase.loading;
+  ParkourMove move = ParkourMove.skyDrop;
 
   double loadingProgress = 0.0;
   String loadingLabel = 'Loading Shibuya...';
 
   int score = 0;
-  int highScore = 0;
   double speedKmh = 0.0;
   double maxSpeedKmh = 0.0;
   int combo = 1;
-  int maxCombo = 1;
-  int signsLit = 0;
-  int boostRingsHit = 0;
-  int nearMisses = 0;
-  double distanceMeters = 0.0;
-  double elapsedSeconds = 0.0;
+  double runTimeSec = 0.0;
+  double elapsed = 0.0;
 
-  bool autoPilotEnabled = false;
+  /// 0..1 overcharge meter (speed above the cruise target).
+  double overchargeRatio = 0.0;
+
+  /// Distance along the route spline in meters and the route length.
+  double routeS = 0.0;
+  double routeLength = 1047.1;
+
+  /// Hero world position on the ground plane (meters, three.js frame:
+  /// +X east, +Z south) and heading for the minimap.
+  double heroX = -48.0;
+  double heroZ = -5.2;
+  double heroHeading = 1.485;
+
+  StreetSegment? street;
+
+  bool autoPilot = false;
   bool muted = false;
   bool photoMode = false;
-  String? crashReason;
+  PhotoPreset photoPreset = PhotoPreset.hero;
 
-  ToastEvent? activeToast;
-  int _nextToastId = 1;
+  /// Onboarding hint pill: shown for the first seconds of the run.
+  bool onboardingVisible = false;
 
-  double get routeProgress =>
-      (distanceMeters / totalRouteMeters).clamp(0.0, 1.0);
+  /// Google sign letters (G o o g l e) ignited during the finale.
+  final List<bool> googleLettersLit = List<bool>.filled(6, false);
 
-  ShibuyaZone get currentZone {
-    ShibuyaZone active = zones.first;
-    for (final z in zones) {
-      if (distanceMeters >= z.startMeters) {
-        active = z;
-      }
+  ActionCallout? callout;
+  int _nextCalloutId = 1;
+
+  bool get isGameplay =>
+      phase == AppPhase.skyDrop ||
+      phase == AppPhase.playing ||
+      phase == AppPhase.finale;
+
+  bool get speedOvercharge =>
+      phase == AppPhase.playing &&
+      (speedKmh >= overchargeKmh || overchargeRatio >= 0.58);
+
+  bool get highChain => combo >= 4;
+
+  /// Badge shown in the telemetry pill.
+  ParkourMove get displayMove {
+    if (phase == AppPhase.skyDrop) return ParkourMove.skyDrop;
+    if (speedOvercharge && move == ParkourMove.sprint) {
+      return ParkourMove.overcharge;
     }
-    return active;
+    return move;
   }
 
-  void setLoadingProgress(double value, [String? label]) {
+  void setLoading(double value, String label) {
     loadingProgress = value.clamp(0.0, 1.0);
-    if (label != null) {
-      loadingLabel = label;
-    }
+    loadingLabel = label;
     notifyListeners();
   }
 
   void finishLoading() {
     loadingProgress = 1.0;
-    screen = GameScreen.mapOverview;
+    phase = AppPhase.mapsTitle;
     notifyListeners();
   }
 
-  void startRun() {
-    screen = GameScreen.playing;
-    phase = RunPhase.skyDrop;
-    actionBadge = 'SKY DROP';
+  void beginRun() {
+    phase = AppPhase.skyDrop;
+    move = ParkourMove.skyDrop;
     score = 0;
-    speedKmh = 0.0;
-    maxSpeedKmh = 0.0;
+    speedKmh = 0;
+    maxSpeedKmh = 0;
     combo = 1;
-    maxCombo = 1;
-    signsLit = 0;
-    boostRingsHit = 0;
-    nearMisses = 0;
-    distanceMeters = 0.0;
-    elapsedSeconds = 0.0;
+    runTimeSec = 0;
+    overchargeRatio = 0;
+    routeS = 0;
     photoMode = false;
-    crashReason = null;
-    activeToast = null;
-    notifyListeners();
-  }
-
-  void returnToMap() {
-    screen = GameScreen.mapOverview;
-    photoMode = false;
-    activeToast = null;
-    notifyListeners();
-  }
-
-  void togglePause() {
-    if (screen == GameScreen.playing) {
-      screen = GameScreen.paused;
-      notifyListeners();
-    } else if (screen == GameScreen.paused) {
-      screen = GameScreen.playing;
-      notifyListeners();
+    photoPreset = PhotoPreset.hero;
+    onboardingVisible = false;
+    callout = null;
+    for (int i = 0; i < 6; i++) {
+      googleLettersLit[i] = false;
     }
+    notifyListeners();
+  }
+
+  void landFromSkyDrop() {
+    phase = AppPhase.playing;
+    move = ParkourMove.sprint;
+    onboardingVisible = true;
+    notifyListeners();
+  }
+
+  void enterFinale() {
+    phase = AppPhase.finale;
+    move = ParkourMove.finaleOrbit;
+    onboardingVisible = false;
+    notifyListeners();
   }
 
   void toggleAutoPilot() {
-    autoPilotEnabled = !autoPilotEnabled;
+    autoPilot = !autoPilot;
     notifyListeners();
   }
 
@@ -167,129 +194,75 @@ class GameState extends ChangeNotifier {
   }
 
   void togglePhotoMode() {
-    if (screen == GameScreen.victory) {
-      photoMode = !photoMode;
-      notifyListeners();
-    }
+    if (!isGameplay) return;
+    photoMode = !photoMode;
+    notifyListeners();
   }
 
-  void showToast(String label, String bonusText, {int colorValue = 0xFFFF5A1F}) {
-    activeToast = ToastEvent(
-      id: _nextToastId++,
+  void setPhotoPreset(PhotoPreset p) {
+    photoPreset = p;
+    notifyListeners();
+  }
+
+  void dismissOnboarding() {
+    if (!onboardingVisible) return;
+    onboardingVisible = false;
+    notifyListeners();
+  }
+
+  void showCallout(
+    String label, {
+    String bonus = '',
+    CalloutAccent accent = CalloutAccent.neon,
+    double duration = 1.6,
+  }) {
+    callout = ActionCallout(
+      id: _nextCalloutId++,
       label: label,
-      bonusText: bonusText,
-      colorValue: colorValue,
-      createdAt: elapsedSeconds,
+      bonus: bonus,
+      accent: accent,
+      createdAt: elapsed,
+      duration: duration,
     );
     notifyListeners();
   }
 
-  void addComboPoints(
-    int basePoints, {
-    bool bumpCombo = true,
-    String? toastLabel,
-    String? toastBonus,
-    int colorValue = 0xFFFF5A1F,
-  }) {
-    if (bumpCombo) {
-      combo = (combo + 1).clamp(1, 12);
-      if (combo > maxCombo) maxCombo = combo;
-    }
+  /// Adds points (multiplied by the current combo) and optionally bumps it.
+  int award(int basePoints, {bool bumpCombo = false}) {
+    if (bumpCombo) combo = (combo + 1).clamp(1, 12);
     final gained = basePoints * combo;
     score += gained;
-    if (score > highScore) highScore = score;
-    if (toastLabel != null) {
-      showToast(toastLabel, toastBonus ?? '+$gained', colorValue: colorValue);
-    } else {
-      notifyListeners();
+    return gained;
+  }
+
+  void resetCombo() {
+    combo = 1;
+  }
+
+  static String formatInt(int v) {
+    final s = v.abs().toString();
+    final buf = StringBuffer(v < 0 ? '-' : '');
+    for (int i = 0; i < s.length; i++) {
+      if (i > 0 && (s.length - i) % 3 == 0) buf.write(',');
+      buf.write(s[i]);
     }
+    return buf.toString();
   }
 
-  void recordBoostRing() {
-    boostRingsHit += 1;
-    addComboPoints(
-      125,
-      toastLabel: 'BOOST RING',
-      toastBonus: '+1,500',
-      colorValue: 0xFFFBBC04,
-    );
+  /// `mm:ss.t` run timer used by the finale banner.
+  static String formatRunTime(double sec) {
+    final m = sec ~/ 60;
+    final s = sec - m * 60;
+    return '${m.toString().padLeft(2, '0')}:${s.toStringAsFixed(1).padLeft(4, '0')}';
   }
 
-  void recordNearMiss({bool tokyoDrift = false}) {
-    nearMisses += 1;
-    addComboPoints(
-      tokyoDrift ? 100 : 60,
-      toastLabel: tokyoDrift ? 'TOKYO DRIFT NEAR MISS' : 'NEAR MISS',
-      toastBonus: tokyoDrift ? '+1,000' : '+500',
-      colorValue: 0xFFFF2A9D,
-    );
-  }
-
-  void recordSignLit() {
-    signsLit += 1;
-    addComboPoints(
-      90,
-      toastLabel: 'NEON SIGN IGNITED',
-      toastBonus: '+${90 * combo}',
-      colorValue: 0xFF00E5FF,
-    );
-  }
-
-  void recordWallToRail() {
-    addComboPoints(
-      150,
-      toastLabel: 'WALL TO RAIL TRANSFER',
-      toastBonus: '+1,500',
-      colorValue: 0xFF00E5FF,
-    );
-  }
-
-  void updateFrame({
-    required double dt,
-    required double currentSpeedKmh,
-    required double currentDistanceMeters,
-    required RunPhase currentPhase,
-    required String currentActionBadge,
-    required int passivePoints,
-  }) {
-    elapsedSeconds += dt;
-    speedKmh = currentSpeedKmh;
-    if (currentSpeedKmh > maxSpeedKmh) {
-      maxSpeedKmh = currentSpeedKmh;
-    }
-    distanceMeters = currentDistanceMeters;
-    phase = currentPhase;
-    actionBadge = currentActionBadge;
-    if (passivePoints > 0) {
-      score += passivePoints;
-      if (score > highScore) highScore = score;
-    }
-
-    if (activeToast != null && elapsedSeconds - activeToast!.createdAt > 1.45) {
-      activeToast = null;
-    }
-    notifyListeners();
-  }
-
-  void triggerGameOver(String reason) {
-    crashReason = reason;
-    screen = GameScreen.gameOver;
-    if (score > highScore) highScore = score;
-    notifyListeners();
-  }
-
-  void triggerVictory() {
-    phase = RunPhase.finale;
-    actionBadge = 'FINALE';
-    addComboPoints(
-      500,
-      bumpCombo: false,
-      toastLabel: 'GOOGLE IGNITED!',
-      toastBonus: '+6,000',
-      colorValue: 0xFF4285F4,
-    );
-    screen = GameScreen.victory;
-    if (score > highScore) highScore = score;
+  /// Per-frame update from the controller; one notify per frame.
+  void tick(double dt) {
+    elapsed += dt;
+    if (phase == AppPhase.playing) runTimeSec += dt;
+    if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh;
+    final c = callout;
+    if (c != null && elapsed - c.createdAt > c.duration) callout = null;
     notifyListeners();
   }
 }
