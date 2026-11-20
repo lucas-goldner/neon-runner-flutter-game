@@ -404,6 +404,12 @@ class HeroSim {
   }
 
   // ------------------------------------------------------------- input
+  /// Pending gameplay events (see [SimEvent]); the controller clears it.
+  final List<SimEvent> events = [];
+  void _emit(String kind, {double? px, double? py, double? pz, int index = 0, double value = 0}) {
+    events.add(SimEvent(kind, px ?? x, py ?? y, pz ?? z, index: index, value: value));
+  }
+
   void pressJump() => _jump = true;
   void pressSlide() => _slide = true;
   void moveLane(int dir) {
@@ -432,7 +438,10 @@ class HeroSim {
     }
     final prev = laneIndex;
     laneIndex = (laneIndex + dir).clamp(-1, 1);
-    if (laneIndex != prev) state.dismissOnboarding();
+    if (laneIndex != prev) {
+      state.dismissOnboarding();
+      _emit('laneChange', value: dir.toDouble());
+    }
   }
 
   // -------------------------------------------------------------- step
@@ -474,6 +483,7 @@ class HeroSim {
   }
 
   void _stepSkyDrop(double dt) {
+    if (dropClock <= 0) _emit('mapsExtrude');
     dropClock = math.min(kDropTime, dropClock + dt);
     final n = dropClock;
     move = SimMove.skyDrop;
@@ -496,6 +506,7 @@ class HeroSim {
         timeSinceLand = 0;
         trauma = math.max(trauma, 0.32);
         voltage = math.max(voltage, 3.6);
+        _emit('skyDropLand', value: 1);
       }
       timeSinceLand += dt;
       speed = _lerp(0, 9, smoothstep(0.2, 1, _clamp((n - 3.05) / 0.23, 0, 1)));
@@ -637,6 +648,7 @@ class HeroSim {
           vy = jump ? 8.8 : 5.8;
           move = SimMove.vault;
           flipStyle = 'none';
+          _emit('jump');
         }
       } else {
         final tan = vm.Vector3.zero();
@@ -681,6 +693,7 @@ class HeroSim {
             pendingRail = ri;
             move = SimMove.vault;
             jump = false;
+            _emit('jump');
             break;
           }
         } else if ((y - top).abs() <= 2.8 || big || jump) {
@@ -704,6 +717,7 @@ class HeroSim {
           pendingRail = ri;
           move = SimMove.vault;
           jump = false;
+          _emit('jump');
           break;
         }
       }
@@ -713,7 +727,9 @@ class HeroSim {
     double p;
     if (auto && bot != null) {
       p = _clamp(bot.targetLateral, -f, f);
-      laneIndex = (p / kLaneW).round().clamp(-1, 1);
+      final li = (p / kLaneW).round().clamp(-1, 1);
+      if (li != laneIndex) _emit('laneChange', value: (li - laneIndex).sign.toDouble());
+      laneIndex = li;
     } else {
       p = _clamp(kLaneW * laneIndex, -f, f);
       for (final w in walls) {
@@ -752,6 +768,8 @@ class HeroSim {
         laneIndex = w.side > 0 ? 1 : -1;
         inLeft = inRight = false;
         move = SimMove.vault;
+        _emit('wallRun', value: 0);
+        _emit('jump');
       } else {
         final n = _clamp((s - w.startS) / math.max(1, w.endS - w.startS), 0, 1);
         final a = w.side * math.min(w.lateralOffset - 0.85, f);
@@ -789,6 +807,7 @@ class HeroSim {
           if (wallsDone.add(w.id)) {
             _popup('WALL RUN 2x');
           }
+          _emit('wallRun', index: wi, value: 1);
           break;
         }
       }
@@ -805,6 +824,7 @@ class HeroSim {
       move = SimMove.vault;
       flipStyle = dbl ? 'front' : 'none';
       flipPhase = 0;
+      _emit('jump', value: dbl ? 1 : 0);
     }
     if (slide && activeWall < 0) {
       stumbleTimer = 0;
@@ -817,6 +837,7 @@ class HeroSim {
         pendingRail = -1;
         canRoofVault = false;
       }
+      if (slideTimer <= 0) _emit('slide', value: 1);
       slideTimer = kSlideTime;
     }
     if (!grounded && fastFall) {
@@ -860,6 +881,7 @@ class HeroSim {
         if (fastFall) slideTimer = math.max(slideTimer, kSlideTime);
         fastFall = false;
         trauma = math.max(trauma, 0.14 * impact);
+        _emit('land', value: impact);
       }
     }
     if (slideTimer > 0 && (grounded || !fastFall)) {
@@ -913,6 +935,7 @@ class HeroSim {
       speed = math.min(44.8, math.max(speed + 5.5 * 0.3, 32.5));
       trauma = math.max(trauma, 0.26);
       hitStop = math.max(hitStop, 0.028);
+      _emit('transfer', py: y + 0.4);
       final pts = _award('transfer', t.data['label'] as String? ?? 'TRANSFER',
           ((t.data['bonusPts'] as num?) ?? 1200).toInt());
       _popup('WALL TO RAIL TRANSFER', bonus: pts);
@@ -946,6 +969,7 @@ class HeroSim {
     speed = math.max(speed, r.isHero ? 36 : 32);
     trauma = math.max(trauma, 0.18);
     voltage = math.min(15, voltage + 1.4);
+    _emit('railGrind', index: ri, value: 1);
     if (railsDone.add(r.id)) {
       _popup(r.isHero ? 'GOOGLE LAUNCH RAIL 2x' : 'RAIL GRIND 2x');
     }
@@ -953,6 +977,7 @@ class HeroSim {
 
   void _stumble({bool keepAirborne = false}) {
     stumbles++;
+    _emit('stumble', py: y + 0.5);
     final a = speed;
     speed = math.max(15.5, a * 0.7);
     final loss = math.max(0, ((a - speed) * 3.6).round());
@@ -993,6 +1018,7 @@ class HeroSim {
         speed = _clamp(speed + 1.8, 25, 45.8);
         trauma = math.max(trauma, 0.18);
         _award('neon_slide', 'NEON SLIDE', 1500, scaled: false);
+        _emit('neonSlide', index: i);
         state.showCallout('NEON SLIDE', bonus: '+1,500', accent: CalloutAccent.neonSlide);
       } else if (y < top + 0.15) {
         portalDone[i] = true;
@@ -1060,6 +1086,7 @@ class HeroSim {
         canRoofVault = true;
         trauma = math.max(trauma, 0.2);
         _award('roof_vault', 'ROOF VAULT', 750, scaled: false);
+        _emit('roofVault', py: y + 0.15);
         state.showCallout('ROOF VAULT', bonus: '+750', accent: CalloutAccent.vault);
       } else if (t.hoodCd <= 0) {
         // ran into the car: HOOD BOUNCE
@@ -1076,6 +1103,7 @@ class HeroSim {
         speed = math.max(18, speed * 0.85);
         trauma = math.max(trauma, 0.3);
         state.showCallout('HOOD BOUNCE', accent: CalloutAccent.danger);
+        _emit('carDeflect', py: y + 0.45, value: 1);
       }
     }
     // Boost rings: duck under / hop over the solid ring rim
@@ -1110,6 +1138,12 @@ class HeroSim {
         final pts = _award('boost_ring', r['label'] as String? ?? 'BOOST RING',
             ((r['bonusPts'] as num?) ?? 400).toInt());
         _popup('BOOST RING', bonus: pts, accent: CalloutAccent.vault);
+        _emit('boostRing',
+            px: (pos[0] as num).toDouble(),
+            py: (pos[1] as num).toDouble(),
+            pz: (pos[2] as num).toDouble(),
+            index: i,
+            value: bottom);
       }
     }
   }
@@ -1135,6 +1169,7 @@ class HeroSim {
       final pts = _award('near_miss', drift ? 'TOKYO DRIFT NEAR MISS' : 'NEAR MISS TAXI', 500);
       _popup(drift ? 'TOKYO DRIFT NEAR MISS' : 'NEAR MISS',
           bonus: pts, accent: CalloutAccent.gold);
+      _emit('nearMiss', py: y + 0.6, value: speed);
     }
     if (s >= 8 && s <= 95 && y < 3.5) {
       for (final c in drift) {
@@ -1149,6 +1184,7 @@ class HeroSim {
         speed = _clamp(speed + 1.2, 24, 45.8);
         final pts = _award('near_miss', 'TOKYO DRIFT NEAR MISS', 600);
         _popup('TOKYO DRIFT NEAR MISS', bonus: pts, accent: CalloutAccent.gold);
+        _emit('driftNearMiss', py: 1.5, value: _clamp(1 - dd / 11.5, 0.35, 1));
       }
     }
   }
@@ -1170,6 +1206,12 @@ class HeroSim {
         trauma = math.max(trauma, 0.24);
         hitStop = math.max(hitStop, 0.035);
         _award('sign', g['label'] as String? ?? 'GATE', 250);
+        final gp = g['pos'] as List<dynamic>;
+        _emit('pinGate',
+            px: (gp[0] as num).toDouble(),
+            py: (gp[1] as num).toDouble(),
+            pz: (gp[2] as num).toDouble(),
+            index: i);
       }
     }
   }
@@ -1201,6 +1243,7 @@ class HeroSim {
         _bldgSignLit.add(t);
         _corridorSigns++;
         _award('sign', n['sign'] as String? ?? 'SHIBUYA', 150);
+        _emit('signIgnite');
         break;
       }
     }
@@ -1225,6 +1268,7 @@ class HeroSim {
 
   void _igniteLetter(int e) {
     state.googleLettersLit[e] = true;
+    _emit('googleLetter', index: e);
     voltage = math.min(15, voltage + 1.1);
     state.combo = math.min(12, state.combo + 1);
     trauma = math.max(trauma, 0.3);
@@ -1262,6 +1306,7 @@ class HeroSim {
       voltage = 15;
       trauma = math.max(trauma, 0.36);
       _award('beacon', 'Rooftop Pin', 1000);
+      _emit('routeComplete');
       state.enterFinale();
     }
   }
@@ -1536,4 +1581,16 @@ class HeroSim {
 class _BotOut {
   bool jump = false, slide = false;
   double targetLateral = 0;
+}
+
+
+/// A gameplay event mirrored from the demo's engine callbacks (onJump,
+/// onBoostRing, onNearMissTaxi, ...). Drained by the scene controller each
+/// frame to drive FX and SFX.
+class SimEvent {
+  SimEvent(this.kind, this.x, this.y, this.z, {this.index = 0, this.value = 0});
+  final String kind;
+  final double x, y, z;
+  final int index;
+  final double value;
 }

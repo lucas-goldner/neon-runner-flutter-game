@@ -24,10 +24,13 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  shaders:
+    - shaders/speed_lines.frag
   assets:
     - assets/data/
     - assets/models/
     - assets/audio/
+    - assets/sfx/
   fonts:
     - family: Inter
       fonts:

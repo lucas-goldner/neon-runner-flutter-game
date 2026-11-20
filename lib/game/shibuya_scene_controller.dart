@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart' as fs;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'fx.dart';
 import 'game_state.dart';
 import 'hero_sim.dart';
 import 'level_data.dart';
@@ -38,9 +39,15 @@ class ShibuyaSceneController {
   late final GlbLibrary glb;
   final List<fs.Node> _taxiNodes = [];
   final List<fs.Node> _driftNodes = [];
-  final List<fs.Node> _rain = [];
+  late final NeonFx fx;
+  final FxFrame _fxf = FxFrame();
+  PegmanPoseResult? _pose;
+  double _mapsMorph = 0;
+
+  /// Overcharge speed-line strength (`_computeEffectiveSpeedLinesFactor`).
+  double speedLinesFactor = 0;
+  double get time => _time;
   final List<_Train> _trains = [];
-  final math.Random _rng = math.Random(7);
 
   // camera state (reference coordinates)
   final vm.Vector3 camPos = vm.Vector3(68, 435, 68);
@@ -82,7 +89,7 @@ class ShibuyaSceneController {
     state.setLoading(0.86, 'Loading Tokyo street fleet...');
     _buildTraffic();
     _buildTrains();
-    _buildRain();
+    fx = NeonFx(world.refRoot);
     state.setLoading(0.95, 'Placing Shibuya Stream...');
     initialized = true;
     state.setLoading(1.0, 'Shibuya ready');
@@ -236,24 +243,15 @@ class ShibuyaSceneController {
     }
   }
 
-  void _buildRain() {
-    final mat = unlit(vm.Vector4(0.55, 0.65, 0.85, 0.35))
-      ..alphaMode = fs.AlphaMode.blend;
-    final geo = fs.CuboidGeometry(vm.Vector3(0.012, 0.9, 0.012));
-    for (int i = 0; i < 220; i++) {
-      final n = fs.Node(mesh: fs.Mesh(geo, mat))
-        ..rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), 0.18);
-      _rain.add(n);
-      scene.add(n);
-    }
-  }
-
   // ----------------------------------------------------------- run flow
   void startNewRun() {
     if (!initialized) return;
     sim.reset();
     state.beginRun();
     pegman.resetTrail();
+    fx.reset();
+    sim.events.clear();
+    _firstPill = true;
     _camInit = false;
     _poPreset = null;
     for (final g in world.pinGates) {
@@ -327,6 +325,7 @@ class ShibuyaSceneController {
     if (!initialized) return;
     _time += dt;
     if (!state.photoMode) sim.step(dt);
+    _handleEvents();
     final c = state.callout;
     if (c != null && c.id != _lastCalloutId) {
       _lastCalloutId = c.id;
@@ -336,11 +335,12 @@ class ShibuyaSceneController {
         soundFx.playBoostRing();
       }
     }
+    _syncAudio();
     _syncProps();
     _syncTrains(dt);
     _syncHero(dt);
     _computeCamera(dt);
-    _syncRain(dt);
+    _syncFx(state.photoMode ? 0 : dt);
     state.tick(state.photoMode ? 0 : dt);
   }
 
@@ -354,6 +354,7 @@ class ShibuyaSceneController {
     } else {
       morph = 1;
     }
+    _mapsMorph = morph;
     final a = 1 - _sStep(0.18, 0.92, morph);
     world.mapsOverlay.visible = a > 0.01;
     world.mapsOverlayMat.baseColorFactor = vm.Vector4(0, 0, 0, a);
@@ -382,8 +383,11 @@ class ShibuyaSceneController {
       final active = sim.activeRail == i;
       // #FF4F00 x4.8 desaturates to pale peach under the demo's AgX grade.
       world.railMats[i].emissiveFactor = active
-          ? hexColor('#FFA27A', 3.4)
+          ? hexColor('#FFAE8C', 1.4)
           : (hero ? hexColor('#38BDF8', 1.55) : hexColor('#FF4F00', 0.72));
+    }
+    for (int i = 0; i < world.wallRunMats.length; i++) {
+      world.wallRunMats[i].emissiveFactor = hexColor('#38BDF8', sim.activeWall == i ? 2.6 : 0.95);
     }
     // Rings stay in the world after a fly-through (the demo only changes
     // their glow); a collected ring glows brighter.
@@ -494,7 +498,9 @@ class ShibuyaSceneController {
       ..flipStyle = sim.flipStyle
       ..overchargeRatio = state.overchargeRatio;
     if (pose == PegmanPose.dance) p.time = _time;
-    pegman.applyPose(_poseSolver.solve(p));
+    final res = _poseSolver.solve(p);
+    pegman.applyPose(res);
+    _pose = res;
   }
 
   double _slideProgress() {
@@ -509,22 +515,163 @@ class ShibuyaSceneController {
     return a;
   }
 
-  void _syncRain(double dt) {
-    final c = w3(camPos.x, camPos.y, camPos.z);
-    final visible = state.phase != AppPhase.mapsTitle &&
-        state.phase != AppPhase.loading &&
-        camPos.y < 120;
-    for (final n in _rain) {
-      n.visible = visible;
-      if (!visible) continue;
-      var p = n.position;
-      p.y -= dt * 26;
-      if (p.y < c.y - 14 || (p - c).length > 34) {
-        p = vm.Vector3(c.x + (_rng.nextDouble() - 0.5) * 50,
-            c.y + 4 + _rng.nextDouble() * 18, c.z + (_rng.nextDouble() - 0.5) * 50);
+  /// Drains [HeroSim.events] like the demo's engine callbacks
+  /// (`onBoostRing` -> `igniteBoostRing`, `onNearMissTaxi` ->
+  /// `triggerNearMissArc`, ...).
+  void _handleEvents() {
+    final hero = vm.Vector3(sim.x, sim.y, sim.z);
+    for (final e in sim.events) {
+      _playEventSound(e);
+      final p = vm.Vector3(e.x, e.y, e.z);
+      switch (e.kind) {
+        case 'mapsExtrude':
+          fx.mapsExtrudeWave(e.x, e.z);
+        case 'routeComplete':
+          fx.finaleShock(sim.rooftop.x, sim.rooftop.z);
+        case 'roofVault':
+          fx.roofVault(p);
+        case 'carDeflect':
+          fx.sparkBurst(p, 24, 1.35, 3.8, math.max(0, p.y - 0.85));
+        case 'stumble':
+          fx.sparkBurst(p, 20, 1.25, 3.2, math.max(0, p.y - 0.5));
+        case 'nearMiss':
+        case 'driftNearMiss':
+          fx.spawnArc(hero, p, 0.25);
+          fx.sparkBurst(p, 18, 1.45, 2.8, math.max(0, sim.groundY));
+        case 'transfer':
+          fx.sparkBurst(p, 22, 1.55, 4, math.max(0, p.y - 0.4));
+        case 'boostRing':
+          fx.spawnArc(hero, p, 0.22);
+          fx.sparkBurst(p, 24, 1.6, 3.4, math.max(0, p.y - 2.3));
+        case 'pinGate':
+          fx.spawnArc(hero, p, 0.26);
+          fx.sparkBurst(p, 16, 1.3, 3.2, math.max(0, p.y - 3.2));
+        case 'neonSlide':
+          final pt = sim.portals[e.index];
+          final pp = pt['pos'] as List<dynamic>;
+          final px = (pp[0] as num).toDouble(), pz = (pp[2] as num).toDouble();
+          final gy = (pt['groundY'] as num?)?.toDouble() ?? 0;
+          final yaw = sim.spline.sample((pt['s'] as num).toDouble()).yaw;
+          final rx = math.cos(yaw), rz = -math.sin(yaw);
+          final crown = vm.Vector3(px, gy + 5.25, pz);
+          fx.spawnArc(hero, crown, 0.3);
+          fx.spawnArc(vm.Vector3(px - rx * 5.6, gy + 4.4, pz - rz * 5.6), crown, 0.28);
+          fx.spawnArc(vm.Vector3(px + rx * 5.6, gy + 4.4, pz + rz * 5.6), crown, 0.28);
+          fx.sparkBurst(crown, 24, 1.45, 2.4, gy);
       }
-      n.position = p;
     }
+    sim.events.clear();
+  }
+
+  /// The demo's callback -> `ShibuyaAudioEngine` wiring.
+  void _playEventSound(SimEvent e) {
+    final a = soundFx;
+    switch (e.kind) {
+      case 'jump':
+        a.play('jump');
+      case 'land':
+        a.play(e.value > 0.6 ? 'land_heavy' : 'land_light');
+      case 'slide':
+        a.play('slide');
+      case 'laneChange':
+        a.play(e.value < 0 ? 'lane_left' : 'lane_right');
+      case 'stumble':
+        a.play('stumble');
+      case 'driftNearMiss':
+        a.play('drift_whoosh');
+      case 'nearMiss':
+        a.play('near_miss');
+      case 'mapsExtrude':
+        a.play('maps_swell');
+      case 'boostRing':
+        a.play('boost_ring');
+      case 'transfer':
+        a.play('transfer');
+      case 'pinGate':
+        a.play('pin_ignition');
+      case 'signIgnite':
+        a.play('electric_arc');
+      case 'googleLetter':
+        a.play('letter_${e.index.clamp(0, 5)}');
+      case 'roofVault':
+        a.play('roof_vault');
+      case 'carDeflect':
+        a.play('car_horn');
+      case 'neonSlide':
+        a.play('neon_arch');
+      case 'skyDropLand':
+        a.play('touchdown');
+      case 'routeComplete':
+        a.play('finale');
+    }
+  }
+
+  int _lastPillId = -1;
+  bool _firstPill = true;
+
+  void _syncAudio() {
+    final a = soundFx;
+    final playing = state.phase == AppPhase.playing && !state.photoMode;
+    if (playing && sim.move == SimMove.railGrind) {
+      a.setRailGrind(true, _clamp(sim.speed / 38, 0.25, 1));
+    } else {
+      a.setRailGrind(false);
+    }
+    a.updateOverchargeWind(playing && sim.move != SimMove.finaleOrbit ? sim.speed : 0);
+    a.skyDropWind(state.phase == AppPhase.skyDrop && !state.photoMode
+        ? _clamp(sim.dropClock / 3.5, 0, 1)
+        : -1);
+    final pill = state.streetPill;
+    if (pill != null && pill.id != _lastPillId) {
+      _lastPillId = pill.id;
+      if (!_firstPill) a.play('street_chime');
+      _firstPill = false;
+    }
+  }
+
+  void _syncFx(double dt) {
+    final f = _fxf;
+    final playing = state.phase == AppPhase.playing;
+    f
+      ..time = _time
+      ..mapsMorph = _mapsMorph
+      ..heroX = sim.x
+      ..heroY = sim.y
+      ..heroZ = sim.z
+      ..heroYaw = sim.yaw
+      ..groundY = sim.groundY
+      ..speed = sim.speed
+      ..overcharge = state.overchargeRatio
+      ..skyDrop = sim.move == SimMove.skyDrop
+      ..finale = sim.move == SimMove.finaleOrbit
+      ..railGrind = sim.move == SimMove.railGrind
+      ..wallRun = sim.move == SimMove.wallRun
+      ..heroVisible = pegman.root.visible
+      ..rainVisible = state.phase != AppPhase.mapsTitle && state.phase != AppPhase.loading
+      ..camX = camPos.x
+      ..camY = camPos.y
+      ..camZ = camPos.z
+      ..pixelSize = 2 * math.tan(camFov * vm.degrees2Radians / 2) / 720
+      ..driftCars = [for (final c in sim.drift) (x: c.x, y: 0.0, z: c.z, yaw: c.yaw)];
+    final pose = _pose;
+    f.sparksActive = pose?.sparksActive ?? false;
+    final co = math.cos(sim.yaw), si = math.sin(sim.yaw);
+    final an = pose?.sparksAnchorLocal ?? const [0.0, 0.08, 0.0];
+    f
+      ..sparkX = sim.x + an[0] * co + an[2] * si
+      ..sparkY = sim.y + an[1]
+      ..sparkZ = sim.z - an[0] * si + an[2] * co;
+    fx.update(dt, f);
+    // _computeEffectiveSpeedLinesFactor
+    double sl = 0;
+    if (!state.photoMode && playing && f.speed >= 34.72 &&
+        sim.move != SimMove.finaleOrbit && sim.move != SimMove.skyDrop) {
+      final i = _clamp((f.speed - 34.72) / 10.5, 0, 1);
+      final r = f.overcharge;
+      final a = r > 0.15 ? _clamp((r - 0.15) / 0.85, 0, 1) : 0.0;
+      sl = _clamp(math.max(i * 0.42, a), 0, 1);
+    }
+    speedLinesFactor = sl;
   }
 
   // ------------------------------------------------------------- camera

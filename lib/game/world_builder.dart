@@ -90,6 +90,7 @@ class ShibuyaWorld {
   final List<GlowProp> bladeSigns = [];
   /// One material per grind rail (index = route grindRails order).
   final List<fs.PhysicallyBasedMaterial> railMats = [];
+  final List<fs.PhysicallyBasedMaterial> wallRunMats = [];
   fs.PhysicallyBasedMaterial? beaconMat;
   final List<List<double>> _footprintBoxes = [];
 
@@ -451,9 +452,9 @@ class ShibuyaWorld {
   void _wallRuns() {
     // _buildWallRunsAndTransferArcs: 0.18 m chevron panels (Lg texture),
     // centre at y + h*0.46, height h*0.78, plus support pylons.
-    final panels = MeshBuf();
     final pylons = MeshBuf();
     for (final wr in level.route['wallRuns'] as List<dynamic>) {
+      final panels = MeshBuf();
       final a = wr['points'] as List<dynamic>;
       final sH = (wr['height'] as num?)?.toDouble() ?? 5.4;
       for (int e = 0; e + 1 < a.length; e++) {
@@ -481,15 +482,20 @@ class ShibuyaWorld {
           pylons.box(vm.Vector3(v(t[0]), base + h * 0.5, v(t[2])), vm.Vector3(0.32, h, 0.32), 0);
         }
       }
+      // color #0F1C32 x map, emissive #38BDF8 x map @0.95 (2.6 while the
+      // hero runs on it: uActiveWallIdx), transparent 0.84.
+      final m = fs.PhysicallyBasedMaterial(baseColorTexture: tex.wallRun, emissiveTexture: tex.wallRun)
+        ..baseColorFactor = hexColor('#0F1C32', 1, 0.84)
+        ..emissiveFactor = hexColor('#38BDF8', 0.95)
+        ..roughnessFactor = 0.14
+        ..metallicFactor = 0.35
+        ..alphaMode = fs.AlphaMode.blend
+        ..doubleSided = true;
+      wallRunMats.add(m);
+      if (!panels.isEmpty) {
+        refRoot.add(fs.Node(name: 'WallRunPanel_${wr['id']}', mesh: fs.Mesh(panels.build(), m)));
+      }
     }
-    final m = fs.PhysicallyBasedMaterial(baseColorTexture: tex.wallRun, emissiveTexture: tex.wallRun)
-      ..baseColorFactor = hexColor('#0F1C32', 1, 0.84)
-      ..emissiveFactor = vm.Vector4(1.0, 0.92, 0.85, 1)
-      ..roughnessFactor = 0.14
-      ..metallicFactor = 0.35
-      ..alphaMode = fs.AlphaMode.blend
-      ..doubleSided = true;
-    if (!panels.isEmpty) refRoot.add(fs.Node(name: 'WallRunPanelsMerged', mesh: fs.Mesh(panels.build(), m)));
     if (!pylons.isEmpty) {
       refRoot.add(fs.Node(
           name: 'WallRunSupportPylons',
@@ -502,14 +508,7 @@ class ShibuyaWorld {
   // ------------------------------------- DistantTokyoSkyline360 (demo)
   void _distantSkyline() {
     // Mulberry32-seeded ring of 96 towers at r = 420..565 around the origin.
-    var seed = (14598366 + 77) & 0xFFFFFFFF;
-    double rnd() {
-      seed = (seed + 0x6D2B79F5) & 0xFFFFFFFF;
-      var t = seed;
-      t = ((t ^ (t >> 15)) * (t | 1)) & 0xFFFFFFFF;
-      t ^= (t + (((t ^ (t >> 7)) * (t | 61)) & 0xFFFFFFFF)) & 0xFFFFFFFF;
-      return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296.0;
-    }
+    final rnd = mulberry32(14598366 + 77);
 
     final walls = MeshBuf();
     for (int e = 0; e < 96; e++) {

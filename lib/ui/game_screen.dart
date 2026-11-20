@@ -11,6 +11,7 @@ import 'hud_overlay.dart';
 import 'loading_screen.dart';
 import 'maps_title_card.dart';
 import 'shibuya_map_view.dart';
+import 'speed_lines.dart';
 
 /// Hosts the Flutter Scene view, the frame ticker, keyboard (A/D, Space,
 /// S, P, 1-3, Esc) and touch/swipe input, and the 2D overlays.
@@ -41,6 +42,7 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
   final Map<String, String> _q = Uri.base.queryParameters;
   bool _autoStarted = false;
   bool _seekDone = false;
+  bool _stopped = false;
 
   @override
   void initState() {
@@ -57,15 +59,26 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
       _lastTick = elapsed;
       return;
     }
-    final dt = ((elapsed - _lastTick).inMicroseconds / 1e6).clamp(0.0, 0.05);
+    var dt = ((elapsed - _lastTick).inMicroseconds / 1e6).clamp(0.0, 0.05);
+    // `&fixdt=1`: step exactly 1/60 s per frame (like the demo's
+    // `__advanceFrame`) so debug captures match 60 fps behaviour.
+    if (_q['fixdt'] == '1') dt = 1 / 60;
     _lastTick = elapsed;
     _debugHooks();
     // `?sim=N` runs N simulation substeps per frame (debug fast-forward).
     final sub = int.tryParse(_q['sim'] ?? '') ?? 1;
     // `&freeze=1` holds the frame right after a seek (debug captures).
     if (_q['freeze'] == '1' && _seekDone) return;
+    if (_stopped) return;
     for (int i = 0; i < sub; i++) {
       _controller.tick(dt);
+    }
+    // `&stopat=<meters>`: run live, then hold the frame once the hero
+    // reaches that route distance (debug captures of in-motion FX).
+    final stopAt = double.tryParse(_q['stopat'] ?? '');
+    if (stopAt != null && _seekDone && _controller.sim.s >= stopAt) {
+      _stopped = true;
+      debugPrint('stopped: s=${_controller.sim.s.toStringAsFixed(1)} move=${_controller.sim.move.name}');
     }
   }
 
@@ -84,6 +97,11 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     // `?seekm=<meters>`: like the demo's __seekRouteProgress — fast-forward
     // the real simulation on Auto-Pilot at 60 Hz until the hero reaches s.
     final seekm = double.tryParse(_q['seekm'] ?? '');
+    if (seekm != null && !_seekDone && _state.phase == AppPhase.skyDrop) {
+      for (int i = 0; i < 600 && _state.phase == AppPhase.skyDrop; i++) {
+        _controller.tick(1 / 60);
+      }
+    }
     if (seekm != null && !_seekDone && _state.phase == AppPhase.playing) {
       _seekDone = true;
       if (!_state.autoPilot) _state.toggleAutoPilot();
@@ -135,6 +153,7 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     if (!_state.isGameplay) return;
     _controller.resetPhotoCamera();
     _state.togglePhotoMode();
+    if (_state.photoMode) _soundFx.play('photo_shutter');
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
@@ -225,6 +244,11 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
                       fs.SceneView(
                         _controller.scene,
                         cameraBuilder: _controller.buildCamera,
+                      ),
+                    if (_controller.initialized && !title)
+                      SpeedLinesOverlay(
+                        factor: _controller.speedLinesFactor,
+                        time: _controller.time,
                       ),
                     if (_controller.initialized && title)
                       ShibuyaMapView(

@@ -14,7 +14,12 @@ double _d(dynamic v, [double fb = 0]) => (v as num?)?.toDouble() ?? fb;
 /// Mulberry32 PRNG, identical to the demo's `Jm()`.
 double Function() mulberry32(int seed) {
   var t = seed & 0xFFFFFFFF;
-  int imul(int a, int b) => (a * b) & 0xFFFFFFFF;
+  // Math.imul, exact on the web too (split into 16-bit halves).
+  int imul(int a, int b) {
+    final ah = (a >> 16) & 0xFFFF, al = a & 0xFFFF;
+    final bh = (b >> 16) & 0xFFFF, bl = b & 0xFFFF;
+    return (al * bl + ((((ah * bl + al * bh) & 0xFFFF) * 65536))) & 0xFFFFFFFF;
+  }
   return () {
     t = (t + 1831565813) & 0xFFFFFFFF;
     var e = imul(t ^ (t >> 15), 1 | t);
