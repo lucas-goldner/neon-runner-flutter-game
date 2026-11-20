@@ -69,6 +69,7 @@ class ShibuyaSceneController {
     final tex = await WorldTextures.create(level);
     state.setLoading(0.74, 'Building Shibuya streets...');
     world = ShibuyaWorld(level, sim.spline, tex, glb)..build();
+    await world.glbWorld.buildSigns();
     scene.add(world.root);
     state.setLoading(0.8, 'Preparing Pegman...');
     pegman = GlbPegman(glb)..attach(world.refRoot);
@@ -83,33 +84,50 @@ class ShibuyaSceneController {
   }
 
   void _configureLighting() {
-    // Moonlit sapphire Tokyo twilight (the demo's sky shader colours).
-    scene.environment =
-        fs.EnvironmentMap.constantDiffuse(vm.Vector3(0.030, 0.050, 0.120));
-    scene.environmentIntensity = 1.0;
-    scene.skybox = fs.Skybox(fs.GradientSkySource(
-      zenithColor: vm.Vector3(0.0065, 0.0175, 0.0580),
-      horizonColor: vm.Vector3(0.0380, 0.0980, 0.2680),
+    // Port of the demo's renderer/shadow-rig setup: moonlit sky dome
+    // (#0F1D3A → #233C6B → #375789), hemisphere light #7AA4E6/#384B6B @0.42,
+    // moon from (0.7427, 0.48, -0.4737) colour #DBEAFF @0.56, warm city rim
+    // light, haze #1E345D @3.2e-4, AgX at exposure 1.18 with light bloom,
+    // vignette 0.14 and film grain.
+    final sky = fs.GradientSkySource(
+      zenithColor: vm.Vector3(0.0085, 0.0220, 0.0680),
+      horizonColor: vm.Vector3(0.0520, 0.1220, 0.2960),
       groundColor: vm.Vector3(0.0055, 0.0095, 0.0220),
       sunColor: vm.Vector3.zero(),
+    );
+    scene.skybox = fs.Skybox(sky);
+    // Hemisphere-like IBL: bake a sky/ground gradient in the hemi colours.
+    scene.environment = fs.EnvironmentMap.fromSky(fs.GradientSkySource(
+      zenithColor: vm.Vector3(0.195, 0.371, 0.791) * 0.42,
+      horizonColor: vm.Vector3(0.11, 0.2, 0.42) * 0.42,
+      groundColor: vm.Vector3(0.040, 0.069, 0.147) * 0.42,
+      sunColor: vm.Vector3.zero(),
     ));
+    scene.environmentIntensity = 1.0;
     scene.toneMapping = fs.ToneMappingMode.agx;
-    scene.exposure = 1.0;
+    scene.exposure = 1.18;
+    final moon = vm.Vector3(0.7427, 0.48, -0.4737).normalized();
     scene.directionalLight = fs.DirectionalLight(
-      direction: vm.Vector3(-0.35, -1.0, 0.25),
-      color: vm.Vector3(0.6, 0.72, 1.0),
-      intensity: 0.7,
+      direction: w3(-moon.x, -moon.y, -moon.z),
+      color: vm.Vector3(0.716, 0.823, 1.0),
+      intensity: 0.56 + 0.68 * 0.35,
     );
     scene.fog
       ..enabled = true
       ..mode = fs.FogMode.exponential
-      ..color = vm.Vector3(0.016, 0.032, 0.085)
-      ..density = 0.0018;
+      ..color = vm.Vector3(0.0130, 0.0343, 0.1046)
+      ..density = 0.0032;
     scene.postProcess.bloom
       ..enabled = true
-      ..intensity = 0.6
+      ..intensity = 0.32
       ..threshold = 1.0
-      ..scatter = 0.65;
+      ..scatter = 0.62;
+    scene.postProcess.vignette
+      ..enabled = true
+      ..intensity = 0.14;
+    scene.postProcess.filmGrain
+      ..enabled = true
+      ..intensity = 0.012;
   }
 
   fs.Node _car(String type) {
@@ -204,7 +222,34 @@ class ShibuyaSceneController {
     state.tick(state.photoMode ? 0 : dt);
   }
 
+  void _syncMapsMorph() {
+    // mapsMorph = smootherstep(dropClock / 0.9); overlay a = 1 - smoothstep(.18, .92, morph)
+    double morph;
+    if (state.phase == AppPhase.loading || state.phase == AppPhase.mapsTitle) {
+      morph = 0;
+    } else if (state.phase == AppPhase.skyDrop) {
+      morph = _qs(sim.dropClock / 0.9);
+    } else {
+      morph = 1;
+    }
+    final a = 1 - _sStep(0.18, 0.92, morph);
+    world.mapsOverlay.visible = a > 0.01;
+    world.mapsOverlayMat.baseColorFactor = vm.Vector4(0, 0, 0, a);
+    world.mapsOverlayMat.emissiveFactor = vm.Vector4(a, a, a, 1);
+    final pulse = (_time * 0.85) % 1;
+    for (int i = 0; i < world.dropPin.length; i++) {
+      final n = world.dropPin[i];
+      n.visible = a > 0.01;
+      if (i == 2) {
+        final k = 1 + pulse * 0.45;
+        final p = n.position;
+        n.localTransform = vm.Matrix4.compose(p, vm.Quaternion.identity(), vm.Vector3(k, 1, k));
+      }
+    }
+  }
+
   void _syncProps() {
+    _syncMapsMorph();
     for (int i = 0; i < world.rings.length; i++) {
       world.rings[i].node.visible = !sim.ringHit[i];
     }
@@ -228,9 +273,9 @@ class ShibuyaSceneController {
     }
     final pulse = 1.6 + 1.2 * (0.5 + 0.5 * math.sin(_time * 3.2));
     world.beaconMat?.emissiveFactor = hexColor('#FBBC05', pulse);
-    for (final s in world.bladeSigns) {
-      s.setLit(true, 0.82 + 0.18 * math.sin(_time * 2.4 + s.baseEmissive.x * 3));
-    }
+    world.glbWorld.updateSigns(sim.s, 1 / 60, _time,
+        finale: state.phase == AppPhase.finale,
+        reset: state.phase == AppPhase.skyDrop || state.phase == AppPhase.mapsTitle);
     for (int i = 0; i < sim.taxis.length; i++) {
       final t = sim.taxis[i];
       final n = _taxiNodes[i];

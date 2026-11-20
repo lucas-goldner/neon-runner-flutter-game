@@ -94,12 +94,12 @@ class ShibuyaWorld {
     root.add(refRoot);
     _ground();
     _buildings();
-    _shopfrontsAndSigns();
     _routeDeck();
     _yamanote();
     _grindRails();
     _wallRuns();
     _barriers();
+    _distantSkyline();
     glbWorld = GlbWorld(this, glb)..build();
   }
 
@@ -119,28 +119,174 @@ class ShibuyaWorld {
   }
 
   // ---------------------------------------------------------------- ground
+  late final fs.PhysicallyBasedMaterial mapsOverlayMat;
+  late final fs.Node mapsOverlay;
+  final List<fs.Node> dropPin = [];
+
+  bool inScramblePlaza(double x, double z) {
+    final sc = level.meta['scrambleCrossing'] as Map<String, dynamic>;
+    final c = sc['center'] as List<dynamic>;
+    final r = (sc['radius'] as num).toDouble();
+    final dx = x - (c[0] as num).toDouble(), dz = z - (c[2] as num).toDouble();
+    return dx * dx + dz * dz < r * r;
+  }
+
   void _ground() {
+    final up = vm.Vector3(0, 1, 0);
+    // ShibuyaMirrorWetAsphalt: 1180 m dark slate tarmac (#111C2D).
+    final asphalt = MeshBuf();
+    asphalt.quad(w3(-590, 0, -590), w3(590, 0, -590), w3(590, 0, 590),
+        w3(-590, 0, 590), up);
+    _add(asphalt,
+        pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 0.42, metallic: 0.06),
+        'ShibuyaMirrorWetAsphalt');
+
+    // DarkModeGoogleMapsGround overlay; fades out during the sky drop.
     final b = level.overview['bounds'] as Map<String, dynamic>;
     final minX = (b['minX'] as num).toDouble();
     final maxX = (b['maxX'] as num).toDouble();
     final minZ = (b['minZ'] as num).toDouble();
     final maxZ = (b['maxZ'] as num).toDouble();
     final buf = MeshBuf();
-    final up = vm.Vector3(0, 1, 0);
-    buf.quad(w3(minX, 0, minZ), w3(maxX, 0, minZ), w3(maxX, 0, maxZ),
-        w3(minX, 0, maxZ), up,
+    buf.quad(w3(minX, 0.055, minZ), w3(maxX, 0.055, minZ), w3(maxX, 0.055, maxZ),
+        w3(minX, 0.055, maxZ), up,
         u0: 0, v0: 0, u1: 1, v1: 1);
-    final mat = pbr(vm.Vector4(0.6, 0.6, 0.6, 1), roughness: 0.55, metallic: 0.1)
-      ..baseColorTexture = tex.ground
-      ..emissiveTexture = tex.ground
-      ..emissiveFactor = vm.Vector4(0.55, 0.6, 0.7, 1);
-    _add(buf, mat, 'maps_ground');
+    mapsOverlayMat = fs.PhysicallyBasedMaterial(baseColorTexture: tex.ground, emissiveTexture: tex.ground)
+      ..baseColorFactor = vm.Vector4(0, 0, 0, 1)
+      ..emissiveFactor = vm.Vector4(1, 1, 1, 1)
+      ..alphaMode = fs.AlphaMode.blend
+      ..doubleSided = true;
+    mapsOverlay = fs.Node(name: 'maps_overlay', mesh: fs.Mesh(buf.build(), mapsOverlayMat));
+    root.add(mapsOverlay);
 
-    // Outer dark apron beyond the mapped area.
-    final apron = MeshBuf();
-    apron.quad(w3(-2000, -0.05, -2000), w3(2000, -0.05, -2000),
-        w3(2000, -0.05, 2000), w3(-2000, -0.05, 2000), up);
-    _add(apron, pbr(hexColor('#0E141F'), emissive: hexColor('#0B111C')), 'apron');
+    // Google Maps drop-pin rings at the start waypoint.
+    final w0 = level.waypoints.first;
+    fs.Node ring(double r0, double r1, String hex, double op, double y) {
+      final g = r0 <= 0
+          ? fs.DiscGeometry(radius: r1, segments: 64)
+          : fs.RingGeometry(innerRadius: r0, outerRadius: r1, segments: 64);
+      final m = fs.UnlitMaterial()
+        ..baseColorFactor = hexColor(hex, 1, op)
+        ..alphaMode = fs.AlphaMode.blend
+        ..doubleSided = true;
+      final n = fs.Node(mesh: fs.Mesh(g, m))..position = w3(w0.x, y, w0.z);
+      root.add(n);
+      dropPin.add(n);
+      return n;
+    }
+
+    ring(0, 10.5, '#FBBC05', 0.22, 0.095);
+    ring(9.2, 10.6, '#FBBC05', 0.96, 0.096);
+    ring(10.8, 11.6, '#FDE68A', 0.56, 0.097);
+    ring(0, 3.4, '#FF4F00', 0.98, 0.098);
+    ring(3.4, 4.0, '#FFFFFF', 0.92, 0.099);
+
+    _sidewalksAndMarkings();
+  }
+
+  /// `_buildGraniteSidewalks` + `_buildScrambleCrosswalks` (road paint).
+  void _sidewalksAndMarkings() {
+    final wps = level.waypoints;
+    final side = MeshBuf();
+    final paint = MeshBuf();
+    const n = 7.25, r = 4.4, i = 0.18, a = 0.24;
+    for (int o = 0; o < wps.length - 1; o++) {
+      final s0 = wps[o], c = wps[o + 1];
+      if (s0.y > 0.25 || c.y > 0.25) continue;
+      final l = (s0.x + c.x) * 0.5, u = (s0.z + c.z) * 0.5;
+      if (inScramblePlaza(l, u) || (l > 230 && u > 205)) continue;
+      final dx = c.x - s0.x, dz = c.z - s0.z;
+      final p = math.sqrt(dx * dx + dz * dz);
+      if (p < 0.8) continue;
+      final m = dx / p, h = dz / p, g = -h, gz = m;
+      final yaw = mirrorYaw(math.atan2(m, h));
+      final y = p + 0.85;
+      for (final e in [-1.0, 1.0]) {
+        final ox = l + g * e * 9.45, oz = u + gz * e * 9.45;
+        if (inScramblePlaza(ox, oz)) continue;
+        side.box(w3(ox, i * 0.5, oz), vm.Vector3(r, i, y), yaw);
+        final fx = l + g * e * (n - a * 0.35), fz = u + gz * e * (n - a * 0.35);
+        side.box(w3(fx, i * 0.42, fz), vm.Vector3(a, i * 0.84, y), yaw);
+      }
+    }
+    _add(side, pbr(hexColor('#1E2736'), roughness: 0.78, metallic: 0.06, emissive: hexColor('#0A101A')),
+        'ShibuyaGraniteSidewalks');
+
+    void flat(double x, double z, double w, double len, double yawRef, [double y = 0.025]) {
+      paint.box(w3(x, y, z), vm.Vector3(w, 0.004, len), mirrorYaw(yawRef));
+    }
+
+    // Scramble crosswalk stripes.
+    for (final cw in level.streets['crosswalks'] as List<dynamic>) {
+      final st = cw['start'] as List<dynamic>, en = cw['end'] as List<dynamic>;
+      final ax = (st[0] as num).toDouble(), az = (st[1] as num).toDouble();
+      final sx = (en[0] as num).toDouble() - ax, sz = (en[1] as num).toDouble() - az;
+      final len = math.sqrt(sx * sx + sz * sz);
+      if (len < 1.5) continue;
+      final ux = sx / len, uz = sz / len;
+      final w = ((cw['width'] as num?)?.toDouble() ?? 8).clamp(3.5, 10.5);
+      final cnt = (cw['stripeCount'] as num?)?.toInt() ?? math.max(4, (len / 1.65).floor());
+      final g = (len / math.max(1, cnt) * 0.48).clamp(0.56, 0.9);
+      final yaw = math.atan2(ux, uz);
+      for (int e = 0; e < cnt; e++) {
+        final t = (e + 0.5) / cnt;
+        // stripe: width w across the walk, depth g along it
+        paint.box(w3(ax + sx * t, 0.025, az + sz * t), vm.Vector3(w, 0.004, g),
+            mirrorYaw(yaw + math.pi / 2));
+      }
+    }
+    // Lane dashes (±1.8) and edge lines (±5.4) every 7.5 m along the route.
+    double acc = 0;
+    for (int e = 0; e < wps.length - 1; e++) {
+      final p0 = wps[e], p1 = wps[e + 1];
+      if (p0.y > 0.25 || p1.y > 0.25) continue;
+      final dx = p1.x - p0.x, dz = p1.z - p0.z;
+      final c = math.sqrt(dx * dx + dz * dz);
+      if (c < 0.5) continue;
+      final l = dx / c, u = dz / c, d = -u, f = l, yaw = math.atan2(l, u);
+      for (double k = 0; k < c; k += 1.5) {
+        acc += 1.5;
+        if (acc < 7.5) continue;
+        acc = 0;
+        final rx = p0.x + l * k, rz = p0.z + u * k;
+        if (inScramblePlaza(rx, rz)) continue;
+        for (final o in [-1.8, 1.8, -5.4, 5.4]) {
+          final edge = o.abs() > 4;
+          flat(rx + d * o, rz + f * o, edge ? 0.16 : 0.18, edge ? 4.4 : 2.6, yaw, 0.022);
+        }
+      }
+    }
+    // Lane arrows every 40 m, stop bars every 95 m.
+    double o = 0, sb = 0;
+    for (int e = 0; e < wps.length - 1; e++) {
+      final p0 = wps[e], p1 = wps[e + 1];
+      if (p0.y > 0.25 || p1.y > 0.25) continue;
+      final dx = p1.x - p0.x, dz = p1.z - p0.z;
+      final u = math.sqrt(dx * dx + dz * dz);
+      if (u < 0.8) continue;
+      final d = dx / u, f = dz / u, px = -f, pz = d, yaw = math.atan2(d, f);
+      o += u;
+      sb += u;
+      final gx = (p0.x + p1.x) * 0.5, gz = (p0.z + p1.z) * 0.5;
+      if (inScramblePlaza(gx, gz)) continue;
+      if (o >= 40) {
+        o = 0;
+        for (final lat in [-3.6, 0.0, 3.6]) {
+          final ax = gx + px * lat, az = gz + pz * lat;
+          const k = 0.96;
+          flat(ax - d * 0.55 * k, az - f * 0.55 * k, 0.32 * k, 2.55 * k, yaw, 0.024);
+          // arrow head (approximated by a short wide bar + tip)
+          flat(ax + d * 1.0 * k, az + f * 1.0 * k, 1.1 * k, 0.5 * k, yaw, 0.024);
+          flat(ax + d * 1.45 * k, az + f * 1.45 * k, 0.55 * k, 0.45 * k, yaw, 0.024);
+        }
+      }
+      if (sb >= 95) {
+        sb = 0;
+        flat(gx, gz, 10.8, 0.46, yaw, 0.023);
+      }
+    }
+    _add(paint, pbr(hexColor('#DCE4EE'), emissive: hexColor('#1A2438', 0.12), roughness: 0.34, metallic: 0.04),
+        'ScrambleCrosswalksSAT');
   }
 
   // ------------------------------------------------------------- buildings
@@ -313,44 +459,6 @@ class ShibuyaWorld {
     }
   }
 
-  // ---------------------------------------- shopfronts hosting neon signs
-  void _shopfrontsAndSigns() {
-    final props = level.route['streetProps'] as Map<String, dynamic>;
-
-
-    // Neon blade signs & billboards, grouped by accent colour.
-    final byAccent = <String, MeshBuf>{};
-    final dark = MeshBuf();
-    for (final k in ['bladeSigns', 'wallBillboards']) {
-      for (final s in props[k] as List<dynamic>) {
-        final m = s as Map<String, dynamic>;
-        final pos = m['pos'] as List<dynamic>;
-        final x = (pos[0] as num).toDouble(),
-            y = (pos[1] as num).toDouble(),
-            z = (pos[2] as num).toDouble();
-        final yaw = mirrorYaw((m['yaw'] as num).toDouble());
-        final wdt = (m['width'] as num).toDouble();
-        final hgt = (m['height'] as num).toDouble();
-        final accent = (m['accent'] as String?) ?? '#FF4F00';
-        final buf = byAccent.putIfAbsent(accent, () => MeshBuf());
-        if (k == 'bladeSigns') {
-          // vertical blade sticking out of the wall
-          dark.box(w3(x, y, z), vm.Vector3(0.32, hgt, wdt), yaw);
-          buf.box(w3(x, y, z), vm.Vector3(0.40, hgt * 0.86, wdt * 0.82), yaw);
-        } else {
-          dark.box(w3(x, y, z), vm.Vector3(wdt + 0.4, hgt + 0.4, 0.3), yaw);
-          buf.box(w3(x, y, z), vm.Vector3(wdt, hgt, 0.42), yaw);
-        }
-      }
-    }
-    _add(dark, pbr(hexColor('#0B1020'), roughness: 0.4), 'sign_frames');
-    byAccent.forEach((accent, buf) {
-      final em = hexColor(accent, 2.4);
-      final mat = pbr(hexColor(accent, 0.6), emissive: em, roughness: 0.3);
-      bladeSigns.add(GlowProp(mat, em, litScale: 1.6));
-      _add(buf, mat, 'neon_signs_$accent');
-    });
-  }
 
   // ------------------------------------------------- route deck & viaduct
   void _routeDeck() {
@@ -402,6 +510,7 @@ class ShibuyaWorld {
     final dashes = MeshBuf();
     for (double d = 4; d < spline.length - 4; d += 9) {
       final a = spline.sample(d, RouteSample());
+      if (a.y < 0.25) continue; // ground markings come from _sidewalksAndMarkings
       for (final lat in [-1.8, 1.8]) {
         final x = a.x + a.rx * lat, z = a.z + a.rz * lat;
         dashes.box(w3(x, a.y + 0.03, z), vm.Vector3(0.14, 0.02, 3.0),
@@ -561,6 +670,40 @@ class ShibuyaWorld {
         'wall_run_frames');
   }
 
+
+  // ------------------------------------- DistantTokyoSkyline360 (demo)
+  void _distantSkyline() {
+    // Mulberry32-seeded ring of 96 towers at r = 420..565 around the origin.
+    var seed = (14598366 + 77) & 0xFFFFFFFF;
+    double rnd() {
+      seed = (seed + 0x6D2B79F5) & 0xFFFFFFFF;
+      var t = seed;
+      t = ((t ^ (t >> 15)) * (t | 1)) & 0xFFFFFFFF;
+      t ^= (t + (((t ^ (t >> 7)) * (t | 61)) & 0xFFFFFFFF)) & 0xFFFFFFFF;
+      return ((t ^ (t >> 14)) & 0xFFFFFFFF) / 4294967296.0;
+    }
+
+    final walls = MeshBuf();
+    for (int e = 0; e < 96; e++) {
+      final t = e / 96 * math.pi * 2 + (rnd() - 0.5) * 0.035;
+      final r = 420 + rnd() * 145;
+      final a = 18 + rnd() * 28, o = 16 + rnd() * 24;
+      final h = 42 + math.pow(rnd(), 1.25) * 185;
+      final cx = math.cos(t) * r, cz = math.sin(t) * r;
+      // box rotated by -t about Y (three.js rotateY(-t))
+      final ca = math.cos(-t), sa = math.sin(-t);
+      XZ c(double lx, double lz) => XZ(cx + lx * ca + lz * sa, cz - lx * sa + lz * ca);
+      final fp = [c(-a / 2, -o / 2), c(a / 2, -o / 2), c(a / 2, o / 2), c(-a / 2, o / 2)];
+      _prism(walls, MeshBuf(), fp, -0.5, h - 0.5);
+    }
+    _add(
+        walls,
+        pbr(hexColor('#243656'), roughness: 0.68, metallic: 0.24)
+          ..baseColorTexture = tex.glassBase
+          ..emissiveTexture = tex.glassGlow
+          ..emissiveFactor = hexColor('#7FB3F2', 0.52 * 1.6),
+        'DistantTokyoSkyline360');
+  }
 
   // ---------------------------------------------------------- barriers
   void _barriers() {

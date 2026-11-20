@@ -577,6 +577,7 @@ class _MinimapPainter extends CustomPainter {
         text: text,
         style: TextStyle(
           fontFamily: Ui.fontUi,
+          fontFamilyFallback: Ui.fontFallback,
           fontSize: 10.5,
           fontWeight: FontWeight.w600,
           height: 1,

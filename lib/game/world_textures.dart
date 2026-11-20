@@ -102,6 +102,113 @@ class WorldTextures {
     return (a, b);
   }
 
+  static final Map<String, fs.Texture2D> _signCache = {};
+
+  static TextPainter _tp(String t, double size, FontWeight w, Color c) =>
+      TextPainter(
+        text: TextSpan(
+          text: t,
+          style: TextStyle(
+              fontFamily: 'NotoSansJP',
+              fontFamilyFallback: const ['Inter'],
+              fontSize: size,
+              fontWeight: w,
+              color: c,
+              height: 1.0),
+        ),
+        textDirection: TextDirection.ltr,
+      )..layout();
+
+  static void _paintCentered(Canvas c, TextPainter tp, double cx, double cy,
+      {bool rotate = false, double maxWidth = 1e9}) {
+    c.save();
+    c.translate(cx, cy);
+    if (rotate) c.rotate(math.pi / 2);
+    final k = tp.width > maxWidth ? maxWidth / tp.width : 1.0;
+    c.scale(k, 1);
+    tp.paint(c, Offset(-tp.width / 2, -tp.height / 2));
+    c.restore();
+  }
+
+  /// Port of the demo's `Mg()` kanji blade-sign cell (192 x 768, vertical).
+  static Future<fs.Texture2D> bladeSign(String text) async {
+    final key = 'blade:$text';
+    if (_signCache[key] != null) return _signCache[key]!;
+    const w = 192.0, h = 768.0;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.drawRect(const Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF070B15));
+    c.drawRect(const Rect.fromLTWH(6, 8, 180, 752), Paint()..color = const Color(0xFF091020));
+    c.drawRect(const Rect.fromLTWH(16, 18, 160, 732),
+        Paint()..style = PaintingStyle.stroke..strokeWidth = 7..color = const Color(0xFFFFFFFF));
+    c.drawRect(const Rect.fromLTWH(26, 28, 140, 712),
+        Paint()..style = PaintingStyle.stroke..strokeWidth = 2.5..color = const Color(0x73FFFFFF));
+    final chars = text.split('').where((e) => e != ' ').toList();
+    final o = 652 / math.max(1, chars.length);
+    final latin = RegExp(r'^[A-Z ]+$').hasMatch(text);
+    final size = latin
+        ? (o * 0.84).floorToDouble().clamp(40.0, 82.0)
+        : (o * 0.82).floorToDouble().clamp(54.0, 108.0);
+    for (int i = 0; i < chars.length; i++) {
+      _paintCentered(c, _tp(chars[i], size, FontWeight.w900, const Color(0xFFFFFFFF)),
+          96, 58 + o * (i + 0.5), rotate: chars[i] == 'ー');
+    }
+    final img = await rec.endRecording().toImage(w.toInt(), h.toInt());
+    return _signCache[key] = await fs.Texture2D.fromImage(img);
+  }
+
+  /// Port of `Ng()` wide billboard cell (512 x 256).
+  static Future<fs.Texture2D> wideBillboard(String text, int index) async {
+    final sub = index.isEven ? 'NEON SCRAMBLE' : 'ネオンスクランブル';
+    final key = 'wide:$text:$sub';
+    if (_signCache[key] != null) return _signCache[key]!;
+    const w = 512.0, h = 256.0;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.drawRect(const Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF080D18));
+    c.drawRect(const Rect.fromLTWH(8, 8, 496, 240), Paint()..color = const Color(0xFF0B1324));
+    final line = Paint()..color = const Color(0x14FFFFFF)..strokeWidth = 2;
+    for (double y = 22; y < 240; y += 16) {
+      c.drawLine(Offset(18, y), Offset(w - 18, y), line);
+    }
+    c.drawRect(const Rect.fromLTWH(18, 18, 476, 220),
+        Paint()..style = PaintingStyle.stroke..strokeWidth = 8..color = const Color(0xFFFFFFFF));
+    final short = text.length <= 4;
+    _paintCentered(c, _tp(text, short ? 104 : 54, FontWeight.w900, const Color(0xFFFFFFFF)),
+        256, short ? 104 : 108, maxWidth: 448);
+    _paintCentered(c, _tp(sub, 28, FontWeight.w700, const Color(0xD1FFFFFF)), 256, 192,
+        maxWidth: 440);
+    final img = await rec.endRecording().toImage(w.toInt(), h.toInt());
+    return _signCache[key] = await fs.Texture2D.fromImage(img);
+  }
+
+  /// Port of `Pg()` tall billboard cell (256 x 640, vertical).
+  static Future<fs.Texture2D> tallBillboard(String text) async {
+    final key = 'tall:$text';
+    if (_signCache[key] != null) return _signCache[key]!;
+    const w = 256.0, h = 640.0;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.drawRect(const Rect.fromLTWH(0, 0, w, h), Paint()..color = const Color(0xFF080D18));
+    c.drawRect(const Rect.fromLTWH(8, 8, 240, 624), Paint()..color = const Color(0xFF0B1324));
+    c.drawRect(const Rect.fromLTWH(18, 18, 220, 604),
+        Paint()..style = PaintingStyle.stroke..strokeWidth = 8..color = const Color(0xFFFFFFFF));
+    c.drawRect(const Rect.fromLTWH(30, 30, 196, 580),
+        Paint()..style = PaintingStyle.stroke..strokeWidth = 3..color = const Color(0x6BFFFFFF));
+    final chars = text.split('').where((e) => e != ' ').toList();
+    final a = 536 / math.max(1, chars.length);
+    final latin = RegExp(r'^[A-Z ]+$').hasMatch(text);
+    final size = latin
+        ? (a * 0.84).floorToDouble().clamp(38.0, 86.0)
+        : (a * 0.82).floorToDouble().clamp(48.0, 96.0);
+    for (int i = 0; i < chars.length; i++) {
+      _paintCentered(c, _tp(chars[i], size, FontWeight.w900, const Color(0xFFFFFFFF)),
+          128, 54 + a * (i + 0.5), rotate: chars[i] == 'ー');
+    }
+    final img = await rec.endRecording().toImage(w.toInt(), h.toInt());
+    return _signCache[key] = await fs.Texture2D.fromImage(img);
+  }
+
   /// White glyph on black for the emissive Google sign letters.
   static Future<ui.Image> _glyph(String ch) async {
     const w = 128, h = 160;

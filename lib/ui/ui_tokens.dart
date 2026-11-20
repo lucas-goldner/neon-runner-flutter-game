@@ -10,6 +10,7 @@ abstract final class Ui {
   static const String fontMono = 'JetBrainsMono';
   static const List<String> fontFallback = [
     'Inter',
+    'NotoSansJP',
     'Hiragino Kaku Gothic ProN',
     'Hiragino Sans',
     'Noto Sans JP',

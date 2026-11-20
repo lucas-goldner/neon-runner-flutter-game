@@ -39,6 +39,14 @@ flutter:
           weight: 700
         - asset: assets/fonts/Inter-ExtraBold.otf
           weight: 800
+    - family: NotoSansJP
+      fonts:
+        - asset: assets/fonts/NotoSansJP-sub-500.ttf
+          weight: 500
+        - asset: assets/fonts/NotoSansJP-sub-700.ttf
+          weight: 700
+        - asset: assets/fonts/NotoSansJP-sub-900.ttf
+          weight: 900
     - family: JetBrainsMono
       fonts:
         - asset: assets/fonts/JetBrainsMono-Regular.ttf

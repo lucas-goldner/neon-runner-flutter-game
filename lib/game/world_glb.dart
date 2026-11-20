@@ -5,9 +5,37 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'glb_library.dart';
 import 'level_data.dart';
+import 'mesh_buf.dart';
 import 'world_builder.dart';
+import 'world_textures.dart';
 
 double _d(dynamic v, [double fb = 0]) => (v as num?)?.toDouble() ?? fb;
+
+const _signTexts = ['NEON', 'NEON SCRAMBLE', 'ネオン', 'ネオンスクランブル', 'ネオン・スクランブル'];
+const _signPalette = ['#FF4F00', '#4285F4', '#EA4335', '#FBBC05', '#34A853', '#38BDF8'];
+
+/// A neon blade sign or wall billboard that ignites as Pegman approaches
+/// (`routeS - heroS <= 38`, glow 1.46 flash → 1.08; dormant glow 0.08).
+class NeonSign {
+  NeonSign(this.routeS, this.material, this.neon);
+  final double routeS;
+  final fs.PhysicallyBasedMaterial material;
+  final vm.Vector4 neon;
+  bool lit = false;
+  double flash = 0;
+  double glow = 0.08;
+
+  void apply(double time, int index) {
+    final litF = ((glow - 0.14) / 0.48).clamp(0.0, 1.0);
+    final f = 0.95 + 0.05 * math.sin(time * 7 + index * 2.1);
+    // lit glyph = mix(neon, white, 0.4) * (1.2 + 1.4 glow); dormant ≈ 0.06.
+    final k = (1.2 + 1.4 * glow) * f;
+    final lr = (neon.x * 0.6 + 0.4) * k, lg = (neon.y * 0.6 + 0.4) * k, lb = (neon.z * 0.6 + 0.4) * k;
+    const d = [0.055, 0.081, 0.133];
+    material.emissiveFactor = vm.Vector4(d[0] + (lr - d[0]) * litF,
+        d[1] + (lg - d[1]) * litF, d[2] + (lb - d[2]) * litF, 1);
+  }
+}
 
 /// Places the demo's glTF models exactly like its `_attach*` / `_build*`
 /// functions (positions, yaw offsets, scales), in the reference frame under
@@ -23,6 +51,7 @@ class GlbWorld {
   /// Rooftop target centre derived from `Podium_PinBeaconRing` (y ≥ 20).
   vm.Vector3 rooftop = vm.Vector3(242.89, 22, 257.3);
   fs.Node? mediaScreen;
+  final List<NeonSign> signs = [];
 
   void build() {
     _googleTower();
@@ -31,6 +60,168 @@ class GlbWorld {
     _pinGates();
     _boostRings();
     _slideArches();
+  }
+
+  /// Kanji blade signs + NeonBillboardTall/Wide wall billboards
+  /// (`_attachKanjiBladeSigns` / `_attachWallBillboards`).
+  Future<void> buildSigns() async {
+    final props = level.route['streetProps'] as Map<String, dynamic>;
+    final hosts = <String, Map<String, dynamic>>{
+      for (final b in ((level.meta['heroArchSlots'] as Map<String, dynamic>)['shopfrontBlocks']
+              as List<dynamic>? ??
+          const []))
+        b['id'] as String: b as Map<String, dynamic>,
+    };
+    String textFor(dynamic t, int i) =>
+        _signTexts.contains(t) ? t as String : _signTexts[i % _signTexts.length];
+    fs.PhysicallyBasedMaterial signMat(fs.Texture2D tex) => fs.PhysicallyBasedMaterial(
+          baseColorTexture: tex,
+          emissiveTexture: tex,
+        )
+          ..baseColorFactor = vm.Vector4(0.35, 0.35, 0.4, 1)
+          ..roughnessFactor = 0.3
+          ..metallicFactor = 0.1
+          ..doubleSided = true;
+
+    // Unit blade box (0.24 x 1 x 1) with the glyph on the ±X faces.
+    final blade = MeshBuf();
+    vm.Vector3 v(double x, double y, double z) => vm.Vector3(x, y, z);
+    blade.quad(v(0.12, -0.5, 0.5), v(0.12, -0.5, -0.5), v(0.12, 0.5, -0.5), v(0.12, 0.5, 0.5),
+        v(1, 0, 0), u0: 0, u1: 1, v0: 1, v1: 0);
+    blade.quad(v(-0.12, -0.5, -0.5), v(-0.12, -0.5, 0.5), v(-0.12, 0.5, 0.5), v(-0.12, 0.5, -0.5),
+        v(-1, 0, 0), u0: 0, u1: 1, v0: 1, v1: 0);
+    for (final sz in [-0.5, 0.5]) {
+      blade.quad(v(-0.12, -0.5, sz), v(0.12, -0.5, sz), v(0.12, 0.5, sz), v(-0.12, 0.5, sz),
+          v(0, 0, sz * 2), u0: 0.01, u1: 0.02, v0: 0.01, v1: 0.02);
+    }
+    blade.quad(v(-0.12, 0.5, -0.5), v(0.12, 0.5, -0.5), v(0.12, 0.5, 0.5), v(-0.12, 0.5, 0.5),
+        v(0, 1, 0), u0: 0.01, u1: 0.02, v0: 0.01, v1: 0.02);
+    final bladeGeo = blade.build();
+    final bracketBuf = MeshBuf();
+
+    final blades = props['bladeSigns'] as List<dynamic>;
+    for (int r = 0; r < blades.length; r++) {
+      final t = blades[r] as Map<String, dynamic>;
+      final a = _d(t['height'], 6.4).clamp(4.0, 9.6);
+      final u = _d(t['width'], 1.4).clamp(1.0, 1.8);
+      final d = (t['wallPoint'] ?? t['pos']) as List<dynamic>;
+      final f = t['wallNormal'] as List<dynamic>? ??
+          [math.sin(_d(t['yaw'])), 0, math.cos(_d(t['yaw']))];
+      final nx = _d(f[0]), nz = _d(f[2]);
+      final p = math.atan2(nx, nz);
+      var m = 0.16;
+      final h = hosts[t['hostId']];
+      if (h != null) {
+        if (h['nodeName'] == 'ShibuyaShopfrontBlockA') {
+          final hp = h['pos'] as List<dynamic>;
+          final e = _d(d[0]) - _d(hp[0]), z = _d(d[2]) - _d(hp[2]);
+          m = e * math.cos(_d(h['yaw'])) - z * math.sin(_d(h['yaw'])) < 0 ? 1.24 : 0.16;
+        } else {
+          m = 0.8;
+        }
+      }
+      final g = switch (t['id']) {
+        'blade_46' => 24.4,
+        'blade_47' => 22.8,
+        'blade_74' => 43.3,
+        _ => _d(d[1]),
+      };
+      final y = m + u * 0.5;
+      final text = textFor(t['text'], r);
+      final color = hexColor((t['accent'] as String?) ?? _signPalette[r % _signPalette.length]);
+      final mat = signMat(await WorldTextures.bladeSign(text));
+      ref.add(fs.Node(name: t['id'] as String? ?? 'blade', mesh: fs.Mesh(bladeGeo, mat))
+        ..localTransform = GlbLibrary.slot(_d(d[0]) + nx * y, g, _d(d[2]) + nz * y, p,
+            vm.Vector3(1, a, u)));
+      // wall brackets
+      final cy = math.cos(p), sy = math.sin(p);
+      for (final e in [-1.0, 1.0]) {
+        final len = m + 0.354;
+        final off = -0.35 + len * 0.5;
+        final lx = 0.0, lz = off;
+        bracketBuf.box(vm.Vector3(_d(d[0]) + lx * cy + lz * sy, g + e * a * 0.34, _d(d[2]) - lx * sy + lz * cy),
+            vm.Vector3(0.12, 0.14, len), p);
+      }
+      final s = NeonSign(_d(t['routeS'], _d(t['s'])), mat, color);
+      s.apply(0, r);
+      signs.add(s);
+    }
+
+    final bills = props['wallBillboards'] as List<dynamic>;
+    int wideIdx = 0, tallIdx = 0;
+    for (final t0 in bills) {
+      final t = t0 as Map<String, dynamic>;
+      final tall = t['nodeName'] == 'NeonBillboardTall';
+      final e = tall ? tallIdx++ : wideIdx++;
+      final tpl = GlbLibrary.template(lib.arch, tall ? 'NeonBillboardTall' : 'NeonBillboardWide');
+      if (tpl == null) continue;
+      final aW = tall ? 4.34 : 12.08, oH = tall ? 11.5 : 5.2;
+      final r = (t['wallPoint'] ?? t['pos']) as List<dynamic>;
+      final c = t['wallNormal'] as List<dynamic>? ??
+          [math.sin(_d(t['yaw'])), 0, math.cos(_d(t['yaw']))];
+      final l = math.atan2(_d(c[0]), _d(c[2]));
+      final u = _d(t['width'], aW).clamp(2.5, 16.0);
+      final d = _d(t['height'], oH).clamp(3.0, 14.0);
+      final h = hosts[t['hostId']];
+      final b = h == null ? 0.0 : (h['nodeName'] == 'ShibuyaShopfrontBlockA' ? 0.72 : 1.12);
+      final sY = t['id'] == 'billboard_29' ? 22.6 : _d(r[1]);
+      final x = t['id'] == 'billboard_40' ? 0.32 : 1.0;
+      tpl.localTransform = GlbLibrary.slot(_d(r[0]) + _d(c[0]) * b, sY - d * 0.5,
+          _d(r[2]) + _d(c[2]) * b, l, vm.Vector3(u / aW, d / oH, x));
+      final text = textFor(t['text'], e);
+      final tex = tall
+          ? await WorldTextures.tallBillboard(text)
+          : await WorldTextures.wideBillboard(text, e);
+      final mat = signMat(tex);
+      final screen = tpl.getChildByName(tall ? 'NeonBillboardTall_ScreenSurface' : 'NeonBillboardWide_ScreenSurface');
+      if (screen?.mesh != null) {
+        for (final p in screen!.mesh!.primitives) {
+          p.material = mat;
+        }
+      }
+      ref.add(tpl);
+      final color = hexColor((t['accent'] as String?) ??
+          _signPalette[(e + (tall ? 2 : 0)) % _signPalette.length]);
+      final s = NeonSign(_d(t['routeS'], _d(t['s'])), mat, color);
+      s.apply(0, e);
+      signs.add(s);
+    }
+    if (!bracketBuf.isEmpty) {
+      ref.add(fs.Node(
+          name: 'KanjiBladeBrackets',
+          mesh: fs.Mesh(bracketBuf.build(), pbr(hexColor('#1B2434'), roughness: 0.48, metallic: 0.74))));
+    }
+  }
+
+  /// Per-frame sign ignition (port of the demo's glow update loop).
+  void updateSigns(double heroS, double dt, double time, {bool finale = false, bool reset = false}) {
+    for (int i = 0; i < signs.length; i++) {
+      final e = signs[i];
+      final n = e.routeS - heroS;
+      if (finale) {
+        e.lit = true;
+        e.flash = 0;
+        e.glow = 1.15;
+      } else if (reset && n > 38) {
+        e.lit = false;
+        e.flash = 0;
+        e.glow = 0.08;
+      } else if (n <= 38) {
+        if (e.lit) {
+          if (e.flash > 0) {
+            e.flash = math.max(0, e.flash - dt * 3.8);
+            e.glow = 1.08 + (1.46 - 1.08) * e.flash;
+          } else if (e.glow < 1.05) {
+            e.glow = 1.08;
+          }
+        } else {
+          e.lit = true;
+          e.flash = 1;
+          e.glow = 1.46;
+        }
+      }
+      e.apply(time, i);
+    }
   }
 
   bool _inScramblePlaza(double x, double z) {
