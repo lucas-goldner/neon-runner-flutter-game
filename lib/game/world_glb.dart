@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart' as fs;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'aokanban.dart';
 import 'glb_library.dart';
 import 'level_data.dart';
 import 'media_screen.dart';
@@ -73,6 +74,31 @@ class GlbWorld {
     _pinGates();
     _boostRings();
     _slideArches();
+  }
+
+  (List<dynamic>, List<vm.Matrix4>)? _signFaces;
+
+  /// Per-sign aokanban faces with their own text texture (`Ag` atlas).
+  Future<void> buildSignFaces() async {
+    final sf = _signFaces;
+    final t = GlbLibrary.template(lib.props, 'AoKanbanSign');
+    if (sf == null || t == null) return;
+    final face = GlbLibrary.meshNodes(t).where((e) => e.$1.name == 'AoKanban_SignFace').toList();
+    if (face.isEmpty) return;
+    final (node, rel) = face.first;
+    for (int i = 0; i < sf.$1.length && i < sf.$2.length; i++) {
+      final tex = await AoKanbanFace.create(sf.$1[i] as Map<String, dynamic>);
+      final m = fs.PhysicallyBasedMaterial(baseColorTexture: tex, emissiveTexture: tex)
+        ..baseColorFactor = vm.Vector4(1, 1, 1, 1)
+        ..emissiveFactor = vm.Vector4(0.78, 0.78, 0.78, 1)
+        ..roughnessFactor = 0.36
+        ..metallicFactor = 0.08
+        ..doubleSided = true;
+      for (final prim in node.mesh!.primitives) {
+        ref.add(fs.Node(name: 'AoKanbanFace_$i', mesh: fs.Mesh(prim.geometry, m))
+          ..localTransform = sf.$2[i] * rel);
+      }
+    }
   }
 
   /// Kanji blade signs + NeonBillboardTall/Wide wall billboards
@@ -415,14 +441,11 @@ class GlbWorld {
               'Gantry_SignalRed' => emissive(m, '#EF4444', 0.25),
               _ => m,
             });
-    inst('AoKanbanSign', _groundSlots(props['roadSigns'] as List, roadSign: true),
-        mat: (n, m) => switch (n) {
-              'AoKanban_LampLens' => emissive(m, '#FFF4DC', 3),
-              'AoKanban_SignFace' => GlbLibrary.clonePbr(m)
-                ..baseColorFactor = hexColor('#0052A5')
-                ..emissiveFactor = hexColor('#0B5FC0', 0.9),
-              _ => m,
-            });
+    final signSlots = _groundSlots(props['roadSigns'] as List, roadSign: true);
+    inst('AoKanbanSign', signSlots,
+        filter: (n) => n != 'AoKanban_SignFace',
+        mat: (n, m) => n == 'AoKanban_LampLens' ? emissive(m, '#FFF4DC', 3) : m);
+    _signFaces = (props['roadSigns'] as List, signSlots);
     inst('PedestrianRail', _groundSlots(props['pedestrianRails'] as List, yawOffset: -math.pi / 2),
         filter: (n) => n == 'PedRail_PostsAndBars' || n == 'PedRail_TopHandrail');
     inst('StreetLampTokyo', _groundSlots(props['streetLamps'] as List, yawOffset: -math.pi / 2),

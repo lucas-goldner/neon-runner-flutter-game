@@ -153,9 +153,12 @@ class ShibuyaWorld {
     // ShibuyaMirrorWetAsphalt: 1180 m dark slate tarmac (#111C2D).
     final asphalt = MeshBuf();
     asphalt.quad(w3(-590, 0, -590), w3(590, 0, -590), w3(590, 0, 590),
-        w3(-590, 0, 590), up);
-    _add(asphalt,
-        pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 0.42, metallic: 0.06),
+        w3(-590, 0, 590), up,
+        u0: 0, v0: 0, u1: 1180 / 72, v1: 1180 / 72);
+    _add(
+        asphalt,
+        pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 1.0, metallic: 1.0)
+          ..metallicRoughnessTexture = tex.wetAsphalt,
         'ShibuyaMirrorWetAsphalt');
 
     // DarkModeGoogleMapsGround overlay; fades out during the sky drop.
@@ -470,7 +473,7 @@ class ShibuyaWorld {
         for (final sd in [-1.0, 1.0]) {
           final nrm = vm.Vector3(sd * ca, 0, -sd * sa);
           panels.quad(p(sd * hw, -hh, -hl), p(sd * hw, -hh, hl), p(sd * hw, hh, hl), p(sd * hw, hh, -hl),
-              nrm, u0: 0, u1: l / 10, v0: 1, v1: 0);
+              nrm, u0: l / 10, u1: 0, v0: 1, v1: 0);
         }
         if (e % 2 == 0 || e == a.length - 2) {
           final base = v(t[1]) > 5 ? 7.5 : 0.0;

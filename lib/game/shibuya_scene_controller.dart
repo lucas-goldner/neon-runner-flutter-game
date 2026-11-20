@@ -74,6 +74,7 @@ class ShibuyaSceneController {
     await world.buildCity();
     world.build();
     await world.glbWorld.buildSigns();
+    await world.glbWorld.buildSignFaces();
     await world.glbWorld.media?.update(0, 1.8, force: true);
     scene.add(world.root);
     state.setLoading(0.8, 'Preparing Pegman...');
@@ -128,6 +129,14 @@ class ShibuyaSceneController {
       ..intensity = 0.18
       ..threshold = 1.0
       ..scatter = 0.62;
+    // Rain-slick tarmac: screen-space reflections of the neon in the
+    // puddles (the demo shades this in its custom wet-asphalt shader).
+    scene.screenSpaceReflections
+      ..enabled = true
+      ..intensity = 0.7
+      ..maxDistance = 60
+      ..resolutionScale = 0.5
+      ..blur = 0.35;
     scene.postProcess.vignette
       ..enabled = true
       ..intensity = 0.14;

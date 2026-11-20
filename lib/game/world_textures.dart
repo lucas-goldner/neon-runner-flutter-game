@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/painting.dart';
@@ -19,6 +20,7 @@ class WorldTextures {
   late final fs.Texture2D shopGlow;
   late final fs.Texture2D ground;
   late final fs.Texture2D wallRun;
+  late final fs.Texture2D wetAsphalt;
   final List<fs.Texture2D> googleGlyphs = [];
 
   static Future<WorldTextures> create(ShibuyaLevel level) async {
@@ -37,6 +39,7 @@ class WorldTextures {
     t.shopGlow = await fs.Texture2D.fromImage(sh.$2);
     t.ground = await fs.Texture2D.fromImage(await _ground(level));
     t.wallRun = await fs.Texture2D.fromImage(await _wallRunTex());
+    t.wetAsphalt = await _wetRoughness();
     for (final ch in ['G', 'o', 'o', 'g', 'l', 'e']) {
       t.googleGlyphs.add(await fs.Texture2D.fromImage(await _glyph(ch)));
     }
@@ -228,6 +231,66 @@ class WorldTextures {
     )..layout();
     tp.paint(c, Offset((w - tp.width) / 2, (h - tp.height) / 2 - 8));
     return rec.endRecording().toImage(w, h);
+  }
+
+  static double _h21(double x, double y) {
+    var px = (x * 127.1) % 1.0, py = (y * 311.7) % 1.0;
+    if (px < 0) px += 1;
+    if (py < 0) py += 1;
+    final d = px * (px + 34.12) + py * (py + 34.12);
+    px += d;
+    py += d;
+    final v = (px * py) % 1.0;
+    return v < 0 ? v + 1 : v;
+  }
+
+  static double _vn(double x, double y) {
+    final ix = x.floorToDouble(), iy = y.floorToDouble();
+    var fx = x - ix, fy = y - iy;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    final a = _h21(ix, iy), b = _h21(ix + 1, iy), c = _h21(ix, iy + 1), d = _h21(ix + 1, iy + 1);
+    return (a + (b - a) * fx) + ((c + (d - c) * fx) - (a + (b - a) * fx)) * fy;
+  }
+
+  /// Puddle roughness map: the demo's `shibuyaWetSheen` FBM + micro breakup
+  /// baked into a tiling 256 px tile (G = roughness 0.34 wet .. 0.68 damp).
+  /// One tile spans 72 m of street.
+  static Future<fs.Texture2D> _wetRoughness() async {
+    const n = 256;
+    const metres = 72.0;
+    final px = Uint8List(n * n * 4);
+    double smooth(double e0, double e1, double x) {
+      final t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+      return t * t * (3 - 2 * t);
+    }
+
+    for (int j = 0; j < n; j++) {
+      for (int i = 0; i < n; i++) {
+        final wx = i / n * metres, wz = j / n * metres;
+        // FBM with the demo's rotation matrix (tiling approximated by
+        // sampling a torus-wrapped domain).
+        var qx = wx * 0.028, qz = wz * 0.028;
+        var v = _vn(qx, qz) * 0.44;
+        for (final (amp, sc, ox, oz) in [(0.30, 2.15, 11.3, 7.1), (0.17, 2.08, 23.7, 17.9), (0.09, 2.12, 5.1, 13.4)]) {
+          final rx = 0.8 * qx + 0.6 * qz, rz = -0.6 * qx + 0.8 * qz;
+          qx = rx * sc + ox;
+          qz = rz * sc + oz;
+          v += _vn(qx, qz) * amp;
+        }
+        final wet = smooth(0.28, 0.78, v);
+        final micro = _vn(wx * 0.24 + 3.7, wz * 0.24 - 5.1);
+        final fine = _vn(wx * 0.72 - 9.2, wz * 0.72 + 4.4);
+        final breakup = (wet * (0.68 + 0.56 * micro) - 0.10 * (1 - fine)).clamp(0.0, 1.0);
+        final rough = 0.68 + (0.34 - 0.68) * breakup;
+        final o = (j * n + i) * 4;
+        px[o] = 255;
+        px[o + 1] = (rough * 255).round();
+        px[o + 2] = (0.06 * 255).round();
+        px[o + 3] = 255;
+      }
+    }
+    return fs.Texture2D.fromPixels(px, n, n, content: fs.TextureContent.data);
   }
 
   /// Port of the demo's `Lg()` wall-run panel texture (chevrons).
