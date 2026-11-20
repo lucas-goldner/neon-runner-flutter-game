@@ -1376,9 +1376,14 @@ class HeroSim {
 
   void _syncState(double dt) {
     state.speedKmh = speed * 3.6;
-    state.overchargeRatio = (state.phase == AppPhase.playing && speed >= 10)
-        ? _clamp((speed - 30) / 14, 0, 1)
-        : 0;
+    // engine: decays by 0.12/step when not sprinting (sky drop, < 10 m/s).
+    if (routeComplete || state.phase != AppPhase.playing) {
+      state.overchargeRatio = 0;
+    } else if (move == SimMove.finaleOrbit || move == SimMove.skyDrop || speed < 10) {
+      state.overchargeRatio = math.max(0, state.overchargeRatio - 0.12);
+    } else {
+      state.overchargeRatio = _clamp((speed - 30) / 14, 0, 1);
+    }
     state.routeS = s;
     state.routeLength = spline.length;
     state.heroX = x;

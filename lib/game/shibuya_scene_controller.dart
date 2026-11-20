@@ -7,6 +7,7 @@ import 'fx.dart';
 import 'game_state.dart';
 import 'hero_sim.dart';
 import 'level_data.dart';
+import 'neon_environment.dart';
 import 'glb_library.dart';
 import 'pegman_builder.dart';
 import 'pegman_glb.dart';
@@ -71,6 +72,11 @@ class ShibuyaSceneController {
     sim = HeroSim(level, state);
     state.setLoading(0.32, 'Lighting Shibuya night sky...');
     _configureLighting();
+    try {
+      scene.environment = await NeonEnvironment.build();
+    } catch (_) {
+      // keep the gradient fallback from _configureLighting
+    }
     int loaded = 0;
     glb = await GlbLibrary.load(
         onProgress: (l) => state.setLoading(0.32 + 0.06 * ++loaded, l));
@@ -256,6 +262,10 @@ class ShibuyaSceneController {
     _poPreset = null;
     for (final g in world.pinGates) {
       g.setLit(false);
+      g.flash = 0;
+    }
+    for (final r in world.rings) {
+      r.glow.flash = 0;
     }
     for (final p in world.slidePortals) {
       p.setLit(false);
@@ -389,19 +399,7 @@ class ShibuyaSceneController {
     for (int i = 0; i < world.wallRunMats.length; i++) {
       world.wallRunMats[i].emissiveFactor = hexColor('#38BDF8', sim.activeWall == i ? 2.6 : 0.95);
     }
-    // Rings stay in the world after a fly-through (the demo only changes
-    // their glow); a collected ring glows brighter.
-    for (int i = 0; i < world.rings.length; i++) {
-      final g = world.rings[i].glow;
-      final want = sim.ringHit[i] ? 2.2 : 1.0;
-      g.material.emissiveFactor = g.baseEmissive * want;
-    }
-    for (int i = 0; i < world.pinGates.length; i++) {
-      final lit = sim.gateLit[i];
-      if (world.pinGates[i].lit != lit || lit) {
-        world.pinGates[i].setLit(lit, 0.85 + 0.15 * math.sin(_time * 6));
-      }
-    }
+    _syncPlasma(1 / 60);
     for (int i = 0; i < world.slidePortals.length; i++) {
       final lit = sim.portalDone[i];
       if (world.slidePortals[i].lit != lit) world.slidePortals[i].setLit(lit);
@@ -541,9 +539,11 @@ class ShibuyaSceneController {
         case 'transfer':
           fx.sparkBurst(p, 22, 1.55, 4, math.max(0, p.y - 0.4));
         case 'boostRing':
+          if (e.index < world.rings.length) world.rings[e.index].glow.flash = 1;
           fx.spawnArc(hero, p, 0.22);
           fx.sparkBurst(p, 24, 1.6, 3.4, math.max(0, p.y - 2.3));
         case 'pinGate':
+          if (e.index < world.pinGates.length) world.pinGates[e.index].flash = 1;
           fx.spawnArc(hero, p, 0.26);
           fx.sparkBurst(p, 16, 1.3, 3.2, math.max(0, p.y - 3.2));
         case 'neonSlide':
@@ -561,6 +561,48 @@ class ShibuyaSceneController {
       }
     }
     sim.events.clear();
+  }
+
+  /// Boost-ring and pin-gate plasma tubes (the demo's unlit `aGlow`
+  /// ShaderMaterials): dormant 0.72 / 0.16, flash to 2.2 / 1.85 on a hit,
+  /// decaying at 3.5 / 3.8 per second to the lit 1.25 / 1.15.
+  void _syncPlasma(double dt) {
+    for (int i = 0; i < world.rings.length; i++) {
+      final g = world.rings[i].glow;
+      if (g.flash > 0) {
+        g.flash = math.max(0, g.flash - dt * 3.5);
+        g.glow = _lerp(1.25, 2.2, g.flash);
+      } else {
+        g.glow = sim.ringHit[i] ? 1.25 : 0.72;
+      }
+      final pulse = 0.88 + 0.12 * math.sin(_time * 5.2);
+      final w = _clamp((g.glow - 1.1) * 0.65, 0, 0.85);
+      final k = (1.25 + 2.4 * g.glow) * pulse;
+      g.material.emissiveFactor = vm.Vector4(
+          _lerp(g.color.x, 1.0, w) * k, _lerp(g.color.y, 0.99, w) * k, _lerp(g.color.z, 0.95, w) * k, 1);
+    }
+    for (int i = 0; i < world.pinGates.length; i++) {
+      final g = world.pinGates[i];
+      if (g.flash > 0) {
+        g.flash = math.max(0, g.flash - dt * 3.8);
+        g.glow = _lerp(1.15, 1.85, g.flash);
+      } else {
+        g.glow = sim.gateLit[i] ? 1.15 : 0.16;
+      }
+      g.lit = sim.gateLit[i];
+      const fresnel = 0.3; // view-dependent rim term, averaged
+      final t = _clamp((g.glow - 0.22) / 0.5, 0, 1);
+      final litF = t * t * (3 - 2 * t);
+      final dk = (0.28 + fresnel * 0.55) * g.glow;
+      final pulse = 0.94 + 0.06 * math.sin(_time * 5.0);
+      final w = _clamp((g.glow - 1.0) * 0.55 + (1 - fresnel) * 0.3, 0, 0.85);
+      final k = (1.85 + 2.25 * g.glow) * pulse;
+      g.material.emissiveFactor = vm.Vector4(
+          _lerp(0.08 + g.color.x * dk, _lerp(g.color.x, 1.0, w) * k, litF),
+          _lerp(0.12 + g.color.y * dk, _lerp(g.color.y, 0.98, w) * k, litF),
+          _lerp(0.20 + g.color.z * dk, _lerp(g.color.z, 0.92, w) * k, litF),
+          1);
+    }
   }
 
   /// The demo's callback -> `ShibuyaAudioEngine` wiring.

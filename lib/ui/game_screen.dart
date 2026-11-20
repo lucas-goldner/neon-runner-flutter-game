@@ -43,6 +43,7 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
   bool _autoStarted = false;
   bool _seekDone = false;
   bool _stopped = false;
+  int _runFrames = 0;
 
   @override
   void initState() {
@@ -75,6 +76,13 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     }
     // `&stopat=<meters>`: run live, then hold the frame once the hero
     // reaches that route distance (debug captures of in-motion FX).
+    // `&stopframe=N`: hold after N ticks of the run (sky-drop captures).
+    if (_state.phase != AppPhase.mapsTitle && _state.phase != AppPhase.loading) _runFrames++;
+    final stopFrame = int.tryParse(_q['stopframe'] ?? '');
+    if (stopFrame != null && _runFrames >= stopFrame) {
+      _stopped = true;
+      debugPrint('stopped: frame=$_runFrames s=${_controller.sim.s.toStringAsFixed(1)}');
+    }
     final stopAt = double.tryParse(_q['stopat'] ?? '');
     if (stopAt != null && _seekDone && _controller.sim.s >= stopAt) {
       _stopped = true;

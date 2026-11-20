@@ -488,19 +488,44 @@ class GlbWorld {
       final sy = math.min(math.max(_d(g['clearHeight'], 7.87) / 6.35, 0.95), 1.25);
       t.localTransform = GlbLibrary.slot(
           _d(p[0]), _d(g['groundY'], _d(p[1])), _d(p[2]), _d(g['yaw']), vm.Vector3(sx, sy, 1));
-      final glow = _litMaterial(t, 'PinGate_PlasmaTube', (g['color'] as String?) ?? '#4285F4');
+      final glow = _litMaterial(t, 'PinGate_PlasmaTube', (g['color'] as String?) ?? '#FF4F00');
+      glow.glow = 0.16;
       world.pinGates.add(glow);
       ref.add(t);
     }
   }
 
+  /// The demo swaps the GLB's glass sleeve for a faint #DCEEFF shell
+  /// (opacity 0.2, roughness 0.08, env x1.45, emissive #60A5FA x0.06) so the
+  /// plasma core reads through it.
+  void _glassSleeve(fs.Node t, String meshName) {
+    final n = t.getChildByName(meshName);
+    if (n?.mesh == null) return;
+    final m = fs.PhysicallyBasedMaterial()
+      ..baseColorFactor = hexColor('#DCEEFF', 1, 0.2)
+      ..alphaMode = fs.AlphaMode.blend
+      ..roughnessFactor = 0.08
+      ..metallicFactor = 0.1
+      ..emissiveFactor = hexColor('#60A5FA', 0.06);
+    for (final p in n!.mesh!.primitives) {
+      p.material = m;
+    }
+  }
+
   GlowProp _litMaterial(fs.Node t, String meshName, String hex) {
+    _glassSleeve(t, meshName.replaceAll('PlasmaTube', 'GlassTube'));
     final n = t.getChildByName(meshName);
     final base = hexColor(hex, 0.9);
     final m = n?.mesh != null
         ? GlbLibrary.clonePbr(n!.mesh!.primitives.first.material)
         : fs.PhysicallyBasedMaterial();
+    // The demo shades the plasma tubes with an unlit ShaderMaterial.
     m
+      ..baseColorFactor = vm.Vector4(0, 0, 0, 1)
+      ..baseColorTexture = null
+      ..metallicFactor = 0
+      ..roughnessFactor = 1
+      ..emissiveTexture = null
       ..emissiveFactor = base
       ..emissiveStrength = 1;
     if (n?.mesh != null) {
@@ -508,7 +533,8 @@ class GlbWorld {
         p.material = m;
       }
     }
-    return GlowProp(m, base, litScale: 3.0);
+    final c = hexColor(hex);
+    return GlowProp(m, base, litScale: 3.0)..color = vm.Vector3(c.x, c.y, c.z);
   }
 
   // -------------------------------------------------------- boost rings
@@ -522,8 +548,8 @@ class GlbWorld {
           ? _d(m['bottomY'])
           : (m['groundY'] != null ? _d(m['groundY']) : (_d(p[1]) > 7.8 ? 7.5 : 0.0));
       t.localTransform = GlbLibrary.slot(_d(p[0]), y, _d(p[2]), _d(m['yaw']));
-      final glow = _litMaterial(t, 'BoostRing_PlasmaTube', '#38BDF8');
-      glow.setLit(true);
+      final glow = _litMaterial(t, 'BoostRing_PlasmaTube', (m['color'] as String?) ?? '#38BDF8');
+      glow.glow = 0.72;
       ref.add(t);
       world.rings.add(RingProp(t, glow, m));
     }

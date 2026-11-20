@@ -51,6 +51,10 @@ class GlowProp {
   final int letterIndex;
   bool lit = false;
 
+  /// Plasma tube state (`aGlow` attribute + flash), ring/gate colour.
+  double glow = 0, flash = 0;
+  vm.Vector3 color = vm.Vector3(0.0, 0.5, 1.0);
+
   void setLit(bool v, [double pulse = 1.0]) {
     lit = v;
     final k = v ? litScale * pulse : 1.0;
