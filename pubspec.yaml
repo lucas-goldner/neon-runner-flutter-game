@@ -26,6 +26,7 @@ flutter:
   uses-material-design: true
   shaders:
     - shaders/speed_lines.frag
+    - shaders/vignette.frag
   assets:
     - assets/data/
     - assets/models/

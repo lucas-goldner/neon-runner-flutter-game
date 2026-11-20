@@ -303,10 +303,7 @@ class NeonFx {
         final along = _smoothstep(0, 0.14, lm) * (1 - _smoothstep(0.55, 1.0, lm));
         final alpha = along * intensity.clamp(0.0, 1.0) * 0.44;
         final mixT = (lm * 0.6 + oc * 0.55).clamp(0.0, 1.0);
-        // The demo tone-maps the ribbon colour in its own shader before the
-        // additive blend (#include <tonemapping_fragment>); ~0.45 matches
-        // that compression in our linear HDR target.
-        final gain = (1.30 + 0.65 * oc) * 0.45;
+        final gain = 1.30 + 0.65 * oc;
         final o = n * fs.BillboardGeometry.floatsPerInstance;
         d[o] = (p0.x + p1.x) * 0.5;
         d[o + 1] = (p0.y + p1.y) * 0.5;

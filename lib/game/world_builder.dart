@@ -162,7 +162,9 @@ class ShibuyaWorld {
         u0: 0, v0: 0, u1: 1180 / 72, v1: 1180 / 72);
     _add(
         asphalt,
-        pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 1.0, metallic: 1.0)
+        // roughness x0.8 calibrates flutter_scene's GGX lobe to the demo's
+        // moonlit wet-asphalt sheen (three.js MeshStandardMaterial).
+        pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 0.8, metallic: 1.0)
           ..metallicRoughnessTexture = tex.wetAsphalt,
         'ShibuyaMirrorWetAsphalt');
 

@@ -3,6 +3,7 @@ import 'dart:math' as math;
 import 'package:flutter_scene/scene.dart' as fs;
 import 'package:vector_math/vector_math.dart' as vm;
 
+import 'demo_grade.dart';
 import 'fx.dart';
 import 'game_state.dart';
 import 'hero_sim.dart';
@@ -124,8 +125,11 @@ class ShibuyaSceneController {
       sunColor: vm.Vector3.zero(),
     ));
     scene.environmentIntensity = 1.0;
-    scene.toneMapping = fs.ToneMappingMode.agx;
+    // The demo's composer grade (applyAgXGolden) via an exact LUT over an
+    // invertible Reinhard curve; see DemoGrade.
+    scene.toneMapping = fs.ToneMappingMode.reinhard;
     scene.exposure = 1.18;
+    scene.postProcess.colorGrading.lut = DemoGrade.lut();
     final moon = vm.Vector3(0.7427, 0.48, -0.4737).normalized();
     scene.directionalLight = fs.DirectionalLight(
       direction: w3(-moon.x, -moon.y, -moon.z),
@@ -138,11 +142,9 @@ class ShibuyaSceneController {
       ..mode = fs.FogMode.exponential
       ..color = vm.Vector3(0.0130, 0.0343, 0.1046)
       ..density = 0.0032;
-    scene.postProcess.bloom
-      ..enabled = true
-      ..intensity = 0.18
-      ..threshold = 1.0
-      ..scatter = 0.62;
+    // The demo's bloom is a 3 px, 13-tap soft-knee blur (strength 0.18):
+    // practically no halo, so the engine's wide bloom stays off.
+    scene.postProcess.bloom.enabled = false;
     // Rain-slick tarmac: screen-space reflections of the neon in the
     // puddles (the demo shades this in its custom wet-asphalt shader).
     scene.screenSpaceReflections
@@ -151,12 +153,11 @@ class ShibuyaSceneController {
       ..maxDistance = 60
       ..resolutionScale = 0.5
       ..blur = 0.35;
-    scene.postProcess.vignette
-      ..enabled = true
-      ..intensity = 0.14;
+    // Vignette is applied in display space after the grade (game_screen).
+    scene.postProcess.vignette.enabled = false;
     scene.postProcess.filmGrain
       ..enabled = true
-      ..intensity = 0.012;
+      ..intensity = 0.006;
   }
 
   fs.Node _car(String type) {
@@ -394,7 +395,7 @@ class ShibuyaSceneController {
       final active = sim.activeRail == i;
       // #FF4F00 x4.8 desaturates to pale peach under the demo's AgX grade.
       world.railMats[i].emissiveFactor = active
-          ? hexColor('#FFAE8C', 1.4)
+          ? hexColor('#FF4F00', 4.8)
           : (hero ? hexColor('#38BDF8', 1.55) : hexColor('#FF4F00', 0.72));
     }
     for (int i = 0; i < world.wallRunMats.length; i++) {

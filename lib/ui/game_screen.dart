@@ -253,6 +253,7 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
                         _controller.scene,
                         cameraBuilder: _controller.buildCamera,
                       ),
+                    if (_controller.initialized && !title) const VignetteOverlay(),
                     if (_controller.initialized && !title)
                       SpeedLinesOverlay(
                         factor: _controller.speedLinesFactor,

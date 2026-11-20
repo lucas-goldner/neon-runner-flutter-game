@@ -63,3 +63,66 @@ class _SpeedLinesPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _SpeedLinesPainter old) => true;
 }
+
+
+/// The demo's display-space vignette (applied after its grade), multiplied
+/// over the 3D view.
+class VignetteOverlay extends StatefulWidget {
+  const VignetteOverlay({super.key, this.strength = 0.14});
+
+  final double strength;
+
+  @override
+  State<VignetteOverlay> createState() => _VignetteOverlayState();
+}
+
+class _VignetteOverlayState extends State<VignetteOverlay> {
+  static ui.FragmentProgram? _program;
+
+  @override
+  void initState() {
+    super.initState();
+    if (_program == null) {
+      ui.FragmentProgram.fromAsset('shaders/vignette.frag').then((p) {
+        _program = p;
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final p = _program;
+    if (p == null) return const SizedBox.shrink();
+    return IgnorePointer(
+      child: RepaintBoundary(
+        child: CustomPaint(
+          size: Size.infinite,
+          painter: _VignettePainter(p.fragmentShader(), widget.strength),
+        ),
+      ),
+    );
+  }
+}
+
+class _VignettePainter extends CustomPainter {
+  _VignettePainter(this.shader, this.strength);
+
+  final ui.FragmentShader shader;
+  final double strength;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    shader
+      ..setFloat(0, size.width)
+      ..setFloat(1, size.height)
+      ..setFloat(2, strength);
+    canvas.drawRect(Offset.zero & size,
+        Paint()
+          ..shader = shader
+          ..blendMode = BlendMode.multiply);
+  }
+
+  @override
+  bool shouldRepaint(covariant _VignettePainter old) => old.strength != strength;
+}
