@@ -9,6 +9,7 @@ import 'level_data.dart';
 import 'glb_library.dart';
 import 'pegman_builder.dart';
 import 'pegman_glb.dart';
+import 'pegman_pose.dart';
 import 'route_spline.dart';
 import 'sound_fx.dart';
 import 'world_builder.dart';
@@ -32,6 +33,8 @@ class ShibuyaSceneController {
   late final HeroSim sim;
   late final ShibuyaWorld world;
   late final GlbPegman pegman;
+  final PegmanPoseSolver _poseSolver = PegmanPoseSolver();
+  final PoseParams _poseParams = PoseParams();
   late final GlbLibrary glb;
   final List<fs.Node> _taxiNodes = [];
   final List<fs.Node> _driftNodes = [];
@@ -403,15 +406,61 @@ class ShibuyaSceneController {
         state.phase != AppPhase.mapsTitle && state.phase != AppPhase.loading;
     pegman.root.visible = visible;
     pegman.placeRoot(sim.x, sim.y, sim.z, sim.yaw);
-    pegman.updateFk(
-      dt: state.photoMode ? 0 : dt,
-      pose: pose,
-      speed: sim.speed,
-      flipPhase: sim.flipPhase,
-      flipStyle: sim.flipStyle,
-      bank: sim.bank,
-      time: _time,
-    );
+    // _updateHeroPose(): feed the demo's IK pose solver.
+    final p = _poseParams;
+    final now = sim.spline.sample(sim.s);
+    final ahead = sim.spline.sample(sim.s + math.max(4.5, sim.speed * 0.25));
+    var fyd = ahead.yaw - now.yaw;
+    while (fyd > math.pi) {
+      fyd -= 2 * math.pi;
+    }
+    while (fyd < -math.pi) {
+      fyd += 2 * math.pi;
+    }
+    p
+      ..move = switch (sim.move) {
+        SimMove.skyDrop => PoseMove.skyDrop,
+        SimMove.sprint => PoseMove.sprint,
+        SimMove.vault => PoseMove.vault,
+        SimMove.slide => PoseMove.slide,
+        SimMove.railGrind => PoseMove.railGrind,
+        SimMove.wallRun => PoseMove.wallRun,
+        SimMove.stumble => PoseMove.stumble,
+        SimMove.pinBeacon => PoseMove.pinBeacon,
+        SimMove.finaleOrbit => PoseMove.finaleOrbit,
+      }
+      ..time = sim.elapsed
+      ..gaitPhase = sim.gaitPhase
+      ..speedMps = sim.speed
+      ..curvature = now.kappa
+      ..steerRate = _clamp(sim.lateralVel / 12, -1, 1)
+      ..futureYawDelta = fyd
+      ..verticalVel = sim.vy
+      ..dropInProgress = _clamp(sim.dropClock / 3.5, 0, 1)
+      ..timeSinceLand = sim.timeSinceLand
+      ..slideProgress = _slideProgress()
+      ..stumbleProgress = sim.stumbleTimer > 0 ? 1 - sim.stumbleTimer / 0.65 : 1
+      ..wallSide = sim.wallSide
+      ..railSide = sim.activeRail % 2 == 0 ? 1 : -1
+      ..railSlope = sim.activeRail >= 0 ? sim.pitch : 0
+      ..voltageKv = sim.voltage
+      ..flipPhase = sim.flipPhase
+      ..flipStyle = sim.flipStyle
+      ..overchargeRatio = state.overchargeRatio;
+    if (pose == PegmanPose.dance) p.time = _time;
+    pegman.applyPose(_poseSolver.solve(p));
+  }
+
+  double _slideProgress() {
+    var a = sim.slideTimer > 0 ? 1 - sim.slideTimer / 0.62 : 0.5;
+    if (sim.move == SimMove.slide) {
+      var duck = sim.fastFall;
+      for (final pt in sim.portals) {
+        if ((sim.s - (pt['s'] as num).toDouble()).abs() <= 2.4) duck = true;
+      }
+      if (duck) a = _clamp(a, 0.14, 0.86);
+    }
+    return a;
   }
 
   void _syncRain(double dt) {

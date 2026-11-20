@@ -32,6 +32,8 @@ class RouteSample {
   double yaw = 0;
   double pitch = 0;
   double ty = 0;
+  /// Signed ground-plane curvature (rad/m), positive turning right.
+  double kappa = 0;
   String surface = 'street';
 }
 
@@ -82,6 +84,17 @@ class RouteSpline {
     o.ty = (b.y - a.y) / span;
     o.pitch = math.atan(o.ty);
     o.surface = t < 0.5 ? a.surface : b.surface;
+    // curvature from the heading change across the neighbouring segment
+    final j = hi < _w.length - 1 ? hi + 1 : hi;
+    final ya = math.atan2(_w[lo].tx, _w[lo].tz), yb = math.atan2(_w[j].tx, _w[j].tz);
+    var dy = yb - ya;
+    while (dy > math.pi) {
+      dy -= 2 * math.pi;
+    }
+    while (dy < -math.pi) {
+      dy += 2 * math.pi;
+    }
+    o.kappa = dy / math.max(1e-3, _w[j].s - _w[lo].s);
     return o;
   }
 }

@@ -5,6 +5,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 
 import 'glb_library.dart';
 import 'pegman_builder.dart' show PegmanPose;
+import 'pegman_pose.dart';
 import 'world_builder.dart' show hexColor, pbr;
 
 /// The demo's authentic `pegman_rig.glb`, wrapped like `_attachPegmanRig`
@@ -191,6 +192,23 @@ class GlbPegman {
     setJoint('ArmR', _e(armR, 0, -spread));
     setJoint('ForearmL', _e(fore, 0, 0));
     setJoint('ForearmR', _e(fore, 0, 0));
+  }
+
+  /// Applies the IK solver output exactly like the demo's world sync:
+  /// FlipPivot at `rootFlipPivotLocal` rotated by `rootFlipQuat`,
+  /// FlipOffset at minus the pivot, then each `v2Nodes` pos + quat.
+  void applyPose(PegmanPoseResult r) {
+    final pv = r.rootFlipPivotLocal;
+    final q = r.rootFlipQuat;
+    flipPivot.localTransform = vm.Matrix4.compose(vm.Vector3(pv[0], pv[1], pv[2]),
+        vm.Quaternion(q[0], q[1], q[2], q[3]), vm.Vector3.all(1));
+    flipOffset.localTransform = vm.Matrix4.translation(vm.Vector3(-pv[0], -pv[1], -pv[2]));
+    r.v2Nodes.forEach((name, np) {
+      final n = nodes[name];
+      if (n == null) return;
+      n.localTransform = vm.Matrix4.compose(vm.Vector3(np.pos[0], np.pos[1], np.pos[2]),
+          vm.Quaternion(np.quat[0], np.quat[1], np.quat[2], np.quat[3]), vm.Vector3.all(1));
+    });
   }
 
   void updateTrail(bool show) {

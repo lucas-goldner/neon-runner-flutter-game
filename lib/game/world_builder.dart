@@ -471,7 +471,7 @@ class ShibuyaWorld {
     }
     final m = fs.PhysicallyBasedMaterial(baseColorTexture: tex.wallRun, emissiveTexture: tex.wallRun)
       ..baseColorFactor = hexColor('#0F1C32', 1, 0.84)
-      ..emissiveFactor = hexColor('#38BDF8', 0.95 * 1.6)
+      ..emissiveFactor = vm.Vector4(1.0, 0.92, 0.85, 1)
       ..roughnessFactor = 0.14
       ..metallicFactor = 0.35
       ..alphaMode = fs.AlphaMode.blend

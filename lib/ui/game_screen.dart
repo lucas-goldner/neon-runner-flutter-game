@@ -92,7 +92,10 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
         for (; i < 5400 && _controller.sim.s < seekm && _state.phase == AppPhase.playing; i++) {
           _controller.tick(1 / 60);
         }
-        debugPrint('seekm: $i steps -> s=${_controller.sim.s.toStringAsFixed(1)}');
+        final c = _controller;
+        debugPrint('seekm: $i steps -> s=${c.sim.s.toStringAsFixed(1)} '
+            'hero=(${c.sim.x.toStringAsFixed(2)},${c.sim.y.toStringAsFixed(2)},${c.sim.z.toStringAsFixed(2)}) '
+            'cam=(${c.camPos.x.toStringAsFixed(2)},${c.camPos.y.toStringAsFixed(2)},${c.camPos.z.toStringAsFixed(2)}) fov=${c.camFov.toStringAsFixed(1)}');
       } catch (e, st) {
         debugPrint('seekm failed: $e\n$st');
       }

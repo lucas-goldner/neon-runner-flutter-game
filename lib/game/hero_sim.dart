@@ -192,6 +192,7 @@ class HeroSim {
   SimMove move = SimMove.skyDrop;
   String flipStyle = 'none';
   double flipPhase = 0, bank = 0, yaw = 1.485;
+  double gaitPhase = 0, timeSinceLand = 99, wallSide = 1, pitch = 0;
   int activeRail = -1, pendingRail = -1, activeWall = -1, activeTransfer = -1;
   double railCd = 0, wallCd = 0;
   bool canRoofVault = false;
@@ -235,6 +236,8 @@ class HeroSim {
     flipStyle = 'none';
     flipPhase = 0;
     bank = 0;
+    gaitPhase = 0;
+    timeSinceLand = 99;
     activeRail = pendingRail = activeWall = activeTransfer = -1;
     railCd = wallCd = 0;
     finaleFlip = false;
@@ -360,16 +363,20 @@ class HeroSim {
     } else if (n < 3.28) {
       if (!grounded) {
         grounded = true;
+        timeSinceLand = 0;
         trauma = math.max(trauma, 0.32);
       }
+      timeSinceLand += dt;
       speed = _lerp(0, 9, smoothstep(0.2, 1, _clamp((n - 3.05) / 0.23, 0, 1)));
       s += speed * dt;
       spline.sample(s, _now);
       y = _now.y;
     } else {
       grounded = true;
+      timeSinceLand += dt;
       speed = _lerp(9, 24, smoothstep(0, 1, _clamp((n - 3.28) / 0.22, 0, 1)));
       s += speed * dt;
+      gaitPhase += speed / 2.2 * math.pi * 2 * dt;
       spline.sample(s, _now);
       y = _now.y;
     }
@@ -379,6 +386,7 @@ class HeroSim {
     z = _now.z + _now.rz * lateral;
     yaw = _now.yaw;
     if (dropClock >= kDropTime - 1e-6) {
+      dropClock = kDropTime;
       move = SimMove.sprint;
       state.landFromSkyDrop();
     }
@@ -386,6 +394,7 @@ class HeroSim {
 
   void _stepParkour(double dt) {
     prevS = s;
+    timeSinceLand += dt;
     if (invulnTimer > 0) invulnTimer = math.max(0, invulnTimer - dt);
     if (stumbleTimer > 0) stumbleTimer = math.max(0, stumbleTimer - dt);
     if (railCd > 0) railCd = math.max(0, railCd - dt);
@@ -624,6 +633,8 @@ class HeroSim {
         z = d.z + d.rz * lateral;
         yaw = d.yaw;
         bank = -w.side * 42 * math.pi / 180;
+        wallSide = w.side;
+        gaitPhase += speed / 1.95 * math.pi * 2 * dt;
         move = SimMove.wallRun;
         voltage = math.min(15, voltage + 1.8 * dt);
         _checkComplete();
@@ -645,7 +656,7 @@ class HeroSim {
           speed = math.max(speed, 30);
           voltage = math.min(15, voltage + 1.2);
           if (wallsDone.add(w.id)) {
-            _popup('WALL RUN 2x', accent: CalloutAccent.vault);
+            _popup('WALL RUN 2x');
           }
           break;
         }
@@ -709,6 +720,7 @@ class HeroSim {
         y = groundY;
         vy = 0;
         grounded = true;
+        timeSinceLand = 0;
         canRoofVault = false;
         jumpCount = 0;
         pendingRail = -1;
@@ -733,8 +745,16 @@ class HeroSim {
     }
     x = d.x + d.rx * lateral;
     z = d.z + d.rz * lateral;
-    yaw = d.yaw;
-    bank = _lerp(bank, -lateralVel * 0.012, math.min(1, dt * 8));
+    final lean = _clamp(math.atan2(lateralVel, math.max(8, speed)) * 0.45, -0.32, 0.32);
+    yaw = d.yaw - lean;
+    pitch = d.pitch;
+    // Hf(): banking into the curve, atan(v^2 kappa / g) clamped to 0.44
+    bank = _clamp(math.atan(math.min(200.0, speed) * math.min(200.0, speed) * d.kappa / 9.81), -0.44, 0.44);
+    if ((move == SimMove.sprint || move == SimMove.stumble) && grounded) {
+      final n = _clamp(2.15 + speed * 0.055, 2.2, 4.1);
+      gaitPhase += speed / n * math.pi * 2 * dt;
+    }
+    if (voltage > 2) voltage = math.max(2, voltage - 0.07 * dt);
     _checkComplete();
   }
 
