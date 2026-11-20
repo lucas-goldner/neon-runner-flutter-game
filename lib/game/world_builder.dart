@@ -128,15 +128,21 @@ class ShibuyaWorld {
   // ------------------------------------------------------------- buildings
   void _buildings() {
     final walls = MeshBuf();
+    final brick = MeshBuf();
     final glass = MeshBuf();
     final roofs = MeshBuf();
     final known = <String>{};
+    final pick = math.Random(1335178864);
     for (final bd in level.buildings) {
       if (bd['isGoogleHero'] == true) continue;
       final fp = ShibuyaLevel.pts(bd['footprint']);
       final h = (bd['height'] as num).toDouble();
       final style = bd['archStyle'] as String? ?? 'urban_block';
-      _prism(style == 'modern_glass_tower' ? glass : walls, roofs, fp, 0, h);
+      final target = style == 'modern_glass_tower'
+          ? glass
+          : (style == 'urban_block' && pick.nextDouble() < 0.55 ? brick : walls);
+      _prism(target, roofs, fp, 0, h);
+      if (style != 'modern_glass_tower') _storefronts(fp);
       known.add('${fp.first.x.toStringAsFixed(1)},${fp.first.z.toStringAsFixed(1)}');
     }
     // Remaining overview footprints (no OSM height): low/mid blocks.
@@ -156,15 +162,23 @@ class ShibuyaWorld {
       // Keep the route corridor clear of guessed geometry.
       if (_distToRoute(cx, cz) < 16) continue;
       final h = 12.0 + rng.nextDouble() * 26.0;
-      _prism(walls, roofs, fp, 0, h);
+      _prism(rng.nextDouble() < 0.4 ? brick : walls, roofs, fp, 0, h);
     }
     _add(
         walls,
         pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.7, metallic: 0.15)
           ..baseColorTexture = tex.facadeBase
           ..emissiveTexture = tex.facadeGlow
-          ..emissiveFactor = vm.Vector4(1.25, 1.25, 1.35, 1),
+          ..emissiveFactor = vm.Vector4(1.0, 1.0, 1.1, 1),
         'osm_buildings');
+    _add(
+        brick,
+        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.85, metallic: 0.05)
+          ..baseColorTexture = tex.brickBase
+          ..emissiveTexture = tex.brickGlow
+          ..emissiveFactor = vm.Vector4(1.0, 0.95, 0.9, 1),
+        'osm_brick_buildings');
+    _flushStorefronts();
     _add(
         glass,
         pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.25, metallic: 0.55)
@@ -174,6 +188,49 @@ class ShibuyaWorld {
         'osm_glass_towers');
     _add(roofs, pbr(hexColor('#1A2338'), emissive: hexColor('#0D1426'), roughness: 0.8),
         'osm_roofs');
+  }
+
+  final MeshBuf _shops = MeshBuf();
+
+  /// Warm ground-floor shopfront band on walls facing within 40 m of the route.
+  void _storefronts(List<XZ> fp) {
+    final pts = List<XZ>.from(fp);
+    double area = 0;
+    for (int i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      area += pts[j].x * pts[i].z - pts[i].x * pts[j].z;
+    }
+    final sign = area >= 0 ? 1.0 : -1.0;
+    for (int i = 0; i + 1 < pts.length; i++) {
+      final a = pts[i], b = pts[i + 1];
+      final dx = b.x - a.x, dz = b.z - a.z;
+      final len = math.sqrt(dx * dx + dz * dz);
+      if (len < 3) continue;
+      final mx = (a.x + b.x) / 2, mz = (a.z + b.z) / 2;
+      if (_distToRoute(mx, mz) > 40) continue;
+      final nx = dz / len * sign, nz = -dx / len * sign;
+      const off = 0.06;
+      final n = vm.Vector3(-nx, 0, nz);
+      _shops.quad(
+          w3(a.x + nx * off, 0.2, a.z + nz * off),
+          w3(b.x + nx * off, 0.2, b.z + nz * off),
+          w3(b.x + nx * off, 3.6, b.z + nz * off),
+          w3(a.x + nx * off, 3.6, a.z + nz * off),
+          n,
+          u0: 0,
+          u1: len / 7.0,
+          v0: 1,
+          v1: 0);
+    }
+  }
+
+  void _flushStorefronts() {
+    _add(
+        _shops,
+        pbr(vm.Vector4(1, 1, 1, 1), roughness: 0.3, metallic: 0.2)
+          ..baseColorTexture = tex.shopBase
+          ..emissiveTexture = tex.shopGlow
+          ..emissiveFactor = vm.Vector4(1.6, 1.4, 1.2, 1),
+        'storefronts');
   }
 
   double _distToRoute(double x, double z) {
@@ -201,8 +258,8 @@ class ShibuyaWorld {
     }
     final sign = area >= 0 ? 1.0 : -1.0;
     double u = 0;
-    const tileW = 7.2; // 8 windows across 7.2 m
-    const tileH = 33.6; // 16 floors (2.1 m) per texture tile
+    const tileW = 5.6; // 8 windows across 5.6 m
+    const tileH = 28.8; // 16 floors (1.8 m) per texture tile
     for (int i = 0; i < pts.length; i++) {
       final a = pts[i], b = pts[(i + 1) % pts.length];
       final dx = b.x - a.x, dz = b.z - a.z;
@@ -529,12 +586,12 @@ class ShibuyaWorld {
   // ------------------------------------------------------------ boost rings
   void _boostRings() {
     final geo = fs.TorusGeometry(
-        radius: 2.4, tubeRadius: 0.13, radialSegments: 40, tubularSegments: 8);
+        radius: 2.4, tubeRadius: 0.16, radialSegments: 8, tubularSegments: 6);
     for (final r in level.route['boostRings'] as List<dynamic>) {
       final m = r as Map<String, dynamic>;
       final pos = m['pos'] as List<dynamic>;
-      final em = hexColor((m['color'] as String?) ?? '#FF4F00', 3.0);
-      final mat = pbr(hexColor((m['color'] as String?) ?? '#FF4F00', 0.6),
+      final em = hexColor('#FF8E6B', 2.2);
+      final mat = pbr(hexColor('#FFD1C2', 0.8),
           emissive: em, roughness: 0.2, metallic: 0.3);
       final node = fs.Node(name: m['id'] as String, mesh: fs.Mesh(geo, mat))
         ..position = w3((pos[0] as num).toDouble(), (pos[1] as num).toDouble(),
@@ -542,7 +599,8 @@ class ShibuyaWorld {
         ..rotation = yawQuat(mirrorYaw((m['yaw'] as num).toDouble()));
       // Torus lies in XZ; stand it up to face along the route.
       node.rotation = node.rotation *
-          vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), math.pi / 2);
+          vm.Quaternion.axisAngle(vm.Vector3(1, 0, 0), math.pi / 2) *
+          vm.Quaternion.axisAngle(vm.Vector3(0, 1, 0), math.pi / 8);
       root.add(node);
       rings.add(RingProp(node, GlowProp(mat, em, litScale: 0.35), m));
     }
@@ -666,6 +724,48 @@ class ShibuyaWorld {
       pole.box(w3(x, 3.4, z), vm.Vector3(0.3, 6.8, 0.3), yaw);
       lamp.box(w3(x, 6.6, z), vm.Vector3(0.6, 1.4, 0.4), yaw);
     }
+    // Blue MLIT "aokanban" direction signs on cantilever arms.
+    final board = MeshBuf();
+    final boardEdge = MeshBuf();
+    for (final rs in props['roadSigns'] as List<dynamic>) {
+      final pos = rs['pos'] as List<dynamic>;
+      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
+      final yaw = mirrorYaw((rs['yaw'] as num).toDouble());
+      final top = (rs['poleTopY'] as num?)?.toDouble() ?? 8.5;
+      final by = (rs['bottomY'] as num?)?.toDouble() ?? 6.2;
+      final ty = (rs['topY'] as num?)?.toDouble() ?? 8.35;
+      final bw = (rs['boardWidth'] as num?)?.toDouble() ?? 4.4;
+      final off = (rs['armCenterOffset'] as num?)?.toDouble() ?? -3.1;
+      final reach = (rs['armReach'] as num?)?.toDouble() ?? 5.2;
+      final gy = (rs['groundY'] as num?)?.toDouble() ?? 0;
+      final c = w3(x, gy, z);
+      final cy = math.cos(yaw), sy = math.sin(yaw);
+      vm.Vector3 at(double lx, double y) =>
+          vm.Vector3(c.x + lx * cy, y, c.z - lx * sy);
+      pole.box(at(0, gy + top / 2), vm.Vector3(0.24, top, 0.24), yaw);
+      pole.box(at(off / 2, gy + ty + 0.05), vm.Vector3(reach, 0.16, 0.16), yaw);
+      boardEdge.box(at(off, gy + (by + ty) / 2), vm.Vector3(bw + 0.16, ty - by + 0.16, 0.1), yaw);
+      board.box(at(off, gy + (by + ty) / 2), vm.Vector3(bw, ty - by, 0.16), yaw);
+    }
+    _add(boardEdge, pbr(hexColor('#E2E8F0'), emissive: hexColor('#BFDBFE', 0.6)), 'aokanban_edge');
+    _add(board, pbr(hexColor('#0052A5'), emissive: hexColor('#0066CC', 1.1)), 'aokanban');
+    // Pedestrian guard rails along the kerbs.
+    final rails = MeshBuf();
+    for (final pr in props['pedestrianRails'] as List<dynamic>) {
+      final pos = pr['pos'] as List<dynamic>;
+      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
+      final yaw = mirrorYaw((pr['yaw'] as num).toDouble());
+      final len = (pr['length'] as num?)?.toDouble() ?? 3.0;
+      rails.box(w3(x, 0.95, z), vm.Vector3(0.06, 0.06, len), yaw);
+      rails.box(w3(x, 0.55, z), vm.Vector3(0.04, 0.04, len), yaw);
+      final cy = math.cos(yaw), sy = math.sin(yaw);
+      for (final t in [-0.5, 0.0, 0.5]) {
+        final p = w3(x, 0.5, z) + vm.Vector3(len * t * sy, 0, len * t * cy);
+        rails.box(p, vm.Vector3(0.06, 1.0, 0.06), yaw);
+      }
+    }
+    _add(rails, pbr(hexColor('#94A3B8'), emissive: hexColor('#334155', 0.5), metallic: 0.7, roughness: 0.35),
+        'pedestrian_rails');
     _add(pole, pbr(hexColor('#334155'), emissive: hexColor('#0F172A'), metallic: 0.6, roughness: 0.4),
         'lamp_poles');
     _add(lamp, pbr(hexColor('#FFF3EC'), emissive: hexColor('#FFE2B8', 3.0)), 'lamp_heads');
@@ -680,25 +780,24 @@ class ShibuyaWorld {
     final roofs = MeshBuf();
     if (hero != null) {
       final fp = ShibuyaLevel.pts(hero['footprint']);
-      // podium up to the rooftop (22 m) then the tower set back above it
+      // podium up to the 22 m rooftop terrace
       _prism(walls, roofs, fp, 0, 22);
-      double cx = 0, cz = 0;
-      for (final q in fp) {
-        cx += q.x;
-        cz += q.z;
-      }
-      cx /= fp.length;
-      cz /= fp.length;
-      final tower = [
-        for (final q in fp) XZ(cx + (q.x - cx) * 0.55, cz + (q.z - cz) * 0.55),
-      ];
-      // offset the tower away from the rooftop beacon so the roof stays open
+      // Tower shaft rises behind the rooftop terrace (away from the facade
+      // the finale camera orbits on), leaving the 22 m roof open.
       final bcn = gt['rooftopBeacon'] as List<dynamic>;
-      final bx = (bcn[0] as num).toDouble(), bz = (bcn[2] as num).toDouble();
-      final ox = (cx - bx) * 0.35, oz = (cz - bz) * 0.35;
-      _prism(walls, roofs,
-          [for (final q in tower) XZ(q.x + ox, q.z + oz)], 22,
-          (gt['height'] as num).toDouble());
+      final fn = gt['facadeNormal'] as List<dynamic>;
+      final fnx = (fn[0] as num).toDouble(), fnz = (fn[2] as num).toDouble();
+      final tcx = (bcn[0] as num).toDouble() - fnx * 24;
+      final tcz = (bcn[2] as num).toDouble() - fnz * 24;
+      final ax = -fnz, az = fnx; // along the facade
+      const hw = 15.0, hd = 11.0;
+      final tower = [
+        XZ(tcx + ax * hw + fnx * hd, tcz + az * hw + fnz * hd),
+        XZ(tcx - ax * hw + fnx * hd, tcz - az * hw + fnz * hd),
+        XZ(tcx - ax * hw - fnx * hd, tcz - az * hw - fnz * hd),
+        XZ(tcx + ax * hw - fnx * hd, tcz + az * hw - fnz * hd),
+      ];
+      _prism(walls, roofs, tower, 0, (gt['height'] as num).toDouble());
     }
     _add(
         walls,

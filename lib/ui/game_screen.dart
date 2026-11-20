@@ -9,7 +9,8 @@ import '../game/shibuya_scene_controller.dart';
 import '../game/sound_fx.dart';
 import 'hud_overlay.dart';
 import 'loading_screen.dart';
-import 'map_overview_screen.dart';
+import 'maps_title_card.dart';
+import 'shibuya_map_view.dart';
 
 /// Hosts the Flutter Scene view, the frame ticker, keyboard (A/D, Space,
 /// S, P, 1-3, Esc) and touch/swipe input, and the 2D overlays.

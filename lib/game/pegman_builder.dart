@@ -19,23 +19,25 @@ class PegmanRig {
     final chest = pbr(hexColor('#E3812D'), emissive: hexColor('#E3812D', 0.2));
 
     root.add(flip);
-    flip.position = vm.Vector3(0, 0.84, 0);
+    root.scale = vm.Vector3.all(1.12);
+    flip.position = vm.Vector3(0, 0.7, 0);
     flip.add(pelvis);
     pelvis.position = vm.Vector3(0, -0.2, 0);
 
     final torso = fs.Node(
-        mesh: fs.Mesh(fs.CapsuleGeometry(radius: 0.2, height: 0.36), body))
-      ..position = vm.Vector3(0, 0.3, 0);
+        mesh: fs.Mesh(fs.CapsuleGeometry(radius: 0.27, height: 0.3), body))
+      ..position = vm.Vector3(0, 0.3, 0)
+      ..scale = vm.Vector3(1.0, 1.0, 0.85);
     final collarN = fs.Node(
-        mesh: fs.Mesh(fs.CylinderGeometry(topRadius: 0.13, bottomRadius: 0.16, height: 0.06), collar))
-      ..position = vm.Vector3(0, 0.5, 0);
+        mesh: fs.Mesh(fs.CylinderGeometry(topRadius: 0.16, bottomRadius: 0.22, height: 0.07), collar))
+      ..position = vm.Vector3(0, 0.6, 0);
     final chestV = fs.Node(
         mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.16, 0.16, 0.04)), chest))
-      ..position = vm.Vector3(0, 0.36, 0.19)
+      ..position = vm.Vector3(0, 0.38, 0.235)
       ..rotation = vm.Quaternion.axisAngle(vm.Vector3(0, 0, 1), math.pi / 4);
     final head = fs.Node(
-        mesh: fs.Mesh(fs.SphereGeometry(radius: 0.17), body))
-      ..position = vm.Vector3(0, 0.72, 0);
+        mesh: fs.Mesh(fs.SphereGeometry(radius: 0.24), body))
+      ..position = vm.Vector3(0, 0.86, 0);
     pelvis.addAll([torso, collarN, chestV, head]);
 
     fs.Node limb(double len, double r) => fs.Node(
@@ -43,16 +45,16 @@ class PegmanRig {
       ..position = vm.Vector3(0, -len / 2, 0);
 
     for (final side in [-1.0, 1.0]) {
-      final hip = fs.Node()..position = vm.Vector3(0.123 * side, 0.02, 0);
-      final knee = fs.Node()..position = vm.Vector3(0, -0.29, 0);
-      hip.add(limb(0.24, 0.075));
-      knee.add(limb(0.22, 0.068));
+      final hip = fs.Node()..position = vm.Vector3(0.14 * side, 0.08, 0);
+      final knee = fs.Node()..position = vm.Vector3(0, -0.27, 0);
+      hip.add(limb(0.2, 0.11));
+      knee.add(limb(0.18, 0.1));
       hip.add(knee);
       pelvis.add(hip);
-      final shoulder = fs.Node()..position = vm.Vector3(0.232 * side, 0.42, 0);
-      final elbow = fs.Node()..position = vm.Vector3(0.0, -0.25, 0);
-      shoulder.add(limb(0.2, 0.058));
-      elbow.add(limb(0.2, 0.052));
+      final shoulder = fs.Node()..position = vm.Vector3(0.3 * side, 0.48, 0);
+      final elbow = fs.Node()..position = vm.Vector3(0.0, -0.24, 0);
+      shoulder.add(limb(0.16, 0.09));
+      elbow.add(limb(0.14, 0.085));
       shoulder.add(elbow);
       pelvis.add(shoulder);
       if (side < 0) {
@@ -69,12 +71,12 @@ class PegmanRig {
     }
 
     // Magenta plasma trail ribbon segments (sky drop / high speed).
-    final trailMat = pbr(hexColor('#FF2A9D', 0.5, 0.8),
+    final trailMat = pbr(hexColor('#FF2A9D', 0.5, 0.45),
         emissive: hexColor('#FF2A9D', 2.6))
       ..alphaMode = fs.AlphaMode.blend;
     for (int i = 0; i < 14; i++) {
       final n = fs.Node(
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.18, 0.18, 1.0)), trailMat))
+          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(0.07, 0.07, 1.0)), trailMat))
         ..visible = false;
       trail.add(n);
     }

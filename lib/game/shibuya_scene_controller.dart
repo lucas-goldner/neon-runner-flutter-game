@@ -98,8 +98,8 @@ class ShibuyaSceneController {
     scene.fog
       ..enabled = true
       ..mode = fs.FogMode.exponential
-      ..color = vm.Vector3(0.022, 0.045, 0.115)
-      ..density = 0.0026;
+      ..color = vm.Vector3(0.016, 0.032, 0.085)
+      ..density = 0.0018;
     scene.postProcess.bloom
       ..enabled = true
       ..intensity = 0.6
@@ -316,7 +316,7 @@ class ShibuyaSceneController {
       time: _time,
       showTrail: visible &&
           state.phase == AppPhase.playing &&
-          (state.overchargeRatio > 0.3 || sim.activeRail >= 0),
+          state.overchargeRatio > 0.3,
     );
   }
 

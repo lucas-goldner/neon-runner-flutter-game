@@ -13,6 +13,10 @@ class WorldTextures {
   late final fs.Texture2D facadeGlow;
   late final fs.Texture2D glassBase;
   late final fs.Texture2D glassGlow;
+  late final fs.Texture2D brickBase;
+  late final fs.Texture2D brickGlow;
+  late final fs.Texture2D shopBase;
+  late final fs.Texture2D shopGlow;
   late final fs.Texture2D ground;
 
   static Future<WorldTextures> create(ShibuyaLevel level) async {
@@ -23,24 +27,42 @@ class WorldTextures {
     final g = await _facade(seed: 19, glass: true);
     t.glassBase = await fs.Texture2D.fromImage(g.$1);
     t.glassGlow = await fs.Texture2D.fromImage(g.$2);
+    final br = await _facade(seed: 31, glass: false, brick: true);
+    t.brickBase = await fs.Texture2D.fromImage(br.$1);
+    t.brickGlow = await fs.Texture2D.fromImage(br.$2);
+    final sh = await _storefront();
+    t.shopBase = await fs.Texture2D.fromImage(sh.$1);
+    t.shopGlow = await fs.Texture2D.fromImage(sh.$2);
     t.ground = await fs.Texture2D.fromImage(await _ground(level));
     return t;
   }
 
   /// A tile of 8 x 16 windows. Returns (base colour, emissive) images.
   static Future<(ui.Image, ui.Image)> _facade(
-      {required int seed, required bool glass}) async {
+      {required int seed, required bool glass, bool brick = false}) async {
     const w = 256, h = 512, cols = 8, rows = 16;
     final rng = math.Random(seed);
     final rb = ui.PictureRecorder();
     final re = ui.PictureRecorder();
     final cb = Canvas(rb);
     final ce = Canvas(re);
-    final wall = glass ? const Color(0xFF1B2D57) : const Color(0xFF17264A);
+    final wall = brick
+        ? const Color(0xFF3A2A2E)
+        : (glass ? const Color(0xFF1B2D57) : const Color(0xFF17264A));
     cb.drawRect(const Rect.fromLTWH(0, 0, 256, 512), Paint()..color = wall);
     // faint facade self-illumination so towers read as deep sapphire blue
     ce.drawRect(const Rect.fromLTWH(0, 0, 256, 512),
-        Paint()..color = glass ? const Color(0xFF0E1A3A) : const Color(0xFF0B1531));
+        Paint()
+          ..color = brick
+              ? const Color(0xFF140F16)
+              : (glass ? const Color(0xFF0E1A3A) : const Color(0xFF0B1531)));
+    if (brick) {
+      // brick coursing
+      final mortar = Paint()..color = const Color(0xFF2C2024);
+      for (double y = 0; y < 512; y += 8) {
+        cb.drawRect(Rect.fromLTWH(0, y, 256, 1.5), mortar);
+      }
+    }
     final cw = w / cols, chh = h / rows;
     for (int r = 0; r < rows; r++) {
       for (int c = 0; c < cols; c++) {
@@ -49,11 +71,11 @@ class WorldTextures {
         final roll = rng.nextDouble();
         Color base;
         Color glow;
-        if (roll < 0.30) {
+        if (roll < 0.22) {
           base = const Color(0xFFFFD08A);
           glow = Color.lerp(const Color(0xFFFFB45A), const Color(0xFFFFE2A8),
               rng.nextDouble())!;
-        } else if (roll < 0.52) {
+        } else if (roll < 0.38) {
           base = const Color(0xFFA9D2FF);
           glow = Color.lerp(const Color(0xFF6FA8FF), const Color(0xFFCFE6FF),
               rng.nextDouble())!;
@@ -66,9 +88,39 @@ class WorldTextures {
       }
     }
     // horizontal floor slab lines
-    final slab = Paint()..color = const Color(0xFF223766);
+    final slab = Paint()
+      ..color = brick ? const Color(0xFF4A3638) : const Color(0xFF223766);
     for (int r = 0; r <= rows; r++) {
       cb.drawRect(Rect.fromLTWH(0, r * chh - 1.5, 256, 3), slab);
+    }
+    final a = await rb.endRecording().toImage(w, h);
+    final b = await re.endRecording().toImage(w, h);
+    return (a, b);
+  }
+
+  /// Ground-floor shopfront band: big warm-lit panes between dark mullions.
+  static Future<(ui.Image, ui.Image)> _storefront() async {
+    const w = 256, h = 128;
+    final rb = ui.PictureRecorder();
+    final re = ui.PictureRecorder();
+    final cb = Canvas(rb);
+    final ce = Canvas(re);
+    cb.drawRect(const Rect.fromLTWH(0, 0, 256, 128), Paint()..color = const Color(0xFF1A1418));
+    ce.drawRect(const Rect.fromLTWH(0, 0, 256, 128), Paint()..color = const Color(0xFF000000));
+    final rng = math.Random(5);
+    for (int i = 0; i < 4; i++) {
+      final x = i * 64.0;
+      final lit = rng.nextDouble() < 0.8;
+      final pane = Rect.fromLTWH(x + 5, 22, 54, 100);
+      final warm = Color.lerp(const Color(0xFFFFB866), const Color(0xFFFFE0B0), rng.nextDouble())!;
+      cb.drawRect(pane, Paint()..color = lit ? warm : const Color(0xFF2A2230));
+      ce.drawRect(pane, Paint()..color = lit ? warm : const Color(0xFF0A0810));
+      // mullions
+      final mull = Paint()..color = const Color(0xFF15111A);
+      cb.drawRect(Rect.fromLTWH(x + 31, 22, 3, 100), mull);
+      ce.drawRect(Rect.fromLTWH(x + 31, 22, 3, 100), Paint()..color = const Color(0xFF000000));
+      // fascia / awning strip
+      cb.drawRect(Rect.fromLTWH(x, 6, 64, 12), Paint()..color = const Color(0xFF2B2230));
     }
     final a = await rb.endRecording().toImage(w, h);
     final b = await re.endRecording().toImage(w, h);
