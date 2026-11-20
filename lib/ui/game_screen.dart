@@ -93,11 +93,13 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     _ticker.dispose();
     _focusNode.dispose();
     _controller.dispose();
+    _soundFx.dispose();
     _state.dispose();
     super.dispose();
   }
 
   void _play() {
+    _soundFx.startMusic();
     _focusNode.requestFocus();
     _controller.startNewRun();
   }
