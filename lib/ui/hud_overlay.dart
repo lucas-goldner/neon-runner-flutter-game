@@ -227,6 +227,9 @@ class _TelemetryPill extends StatelessWidget {
     final highChain = state.highChain;
     const ch = 16.5 * 0.6; // JetBrains Mono advance ≈ 0.6em
     final speedKmh = state.speedKmh.round();
+    // Finale: the demo swaps SPEED for PEAK (max speed reached).
+    final peak = state.phase == AppPhase.finale;
+    final peakKmh = state.maxSpeedKmh.round();
 
     Widget cell(String label, String value, double minCh,
         {bool last = false, Color? color, List<Shadow>? glow}) {
@@ -303,8 +306,11 @@ class _TelemetryPill extends StatelessWidget {
               mainAxisSize: MainAxisSize.min,
               children: [
                 cell('SCORE', GameState.formatInt(state.score), 6.4),
-                cell('SPEED', '$speedKmh km/h', 7.4,
-                    color: overcharge ? Ui.semanticNeonBright : null,
+                cell(peak ? 'PEAK' : 'SPEED',
+                    peak ? (peakKmh > 0 ? '$peakKmh km/h' : '--') : '$speedKmh km/h', 7.4,
+                    color: peak
+                        ? Ui.textStrongSub
+                        : (overcharge ? Ui.semanticNeonBright : null),
                     glow: overcharge
                         ? const [
                             Shadow(color: Color(0xCCFF4F00), blurRadius: 12),

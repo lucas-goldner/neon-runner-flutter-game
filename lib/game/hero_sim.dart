@@ -80,24 +80,33 @@ class TransferRt {
   }
 }
 
+/// Per-type vehicle dimensions from the demo's `jm` table.
+const Map<String, List<double>> kVehicleDims = {
+  // width, height, length
+  'CrownComfortTaxi': [1.879, 1.689, 4.7],
+  'DriftWidebodyOrange': [2.075, 1.315, 4.708],
+  'GtrMidnightBlue': [2.075, 1.358, 4.739],
+  'PandaHatch86': [1.96, 1.314, 4.471],
+  'TunerPearlSilver': [2.055, 1.27, 4.676],
+};
+const List<String> kFleetTypes = [
+  'CrownComfortTaxi', 'DriftWidebodyOrange', 'GtrMidnightBlue', 'PandaHatch86', 'TunerPearlSilver',
+];
+
+/// Lane traffic vehicle (the demo's `taxis` pool entry).
 class Vehicle {
-  Vehicle(this.data)
-      : startS = (data['s'] as num).toDouble(),
-        endS = (data['endS'] as num).toDouble(),
-        laneIndex = (data['laneIndex'] as num).toInt(),
-        lateral = (data['lateral'] as num).toDouble(),
-        width = (data['width'] as num?)?.toDouble() ?? 1.92,
-        height = (data['height'] as num?)?.toDouble() ?? 1.64,
-        length = (data['length'] as num?)?.toDouble() ?? 4.65,
-        speed = (data['speed'] as num?)?.toDouble() ?? 13.5,
-        dir = (data['direction'] as num?)?.toDouble() ?? 1,
-        type = (data['vehicleType'] as String?) ?? 'CrownComfortTaxi' {
-    s = startS;
+  Vehicle(this.type, this.laneIndex) {
+    final d = kVehicleDims[type] ?? kVehicleDims['CrownComfortTaxi']!;
+    width = d[0];
+    height = d[1];
+    length = d[2];
   }
-  final Map<String, dynamic> data;
-  final double startS, endS, lateral, width, height, length, speed, dir;
-  final int laneIndex;
   final String type;
+  final int laneIndex;
+  late final double width, height, length;
+  double startS = 0, endS = 100, laneLateral = 0, speed = 13.4, dir = 1;
+  /// Current (barrier-weaving) lateral offset.
+  double lateral = 0;
   double s = 0, x = 0, y = 0, z = 0, yaw = 0;
   bool active = true;
   double nearMissCd = 0, roofVaultCd = 0, hoodCd = 0;
@@ -179,6 +188,14 @@ class HeroSim {
   late final List<dynamic> driftCenter, driftAxes;
   late final double driftAngle;
   late final vm.Vector3 rooftop;
+  late final Polyline3 _driftLoop = () {
+    final pts = [
+      for (final p in (level.route['scrambleDriftLoop'] as Map<String, dynamic>)['points'] as List<dynamic>)
+        vm.Vector3((p[0] as num).toDouble(), 0, (p[2] as num).toDouble()),
+    ];
+    pts.add(pts.first.clone());
+    return Polyline3(pts);
+  }();
 
   // Hero state
   double s = 0, prevS = 0, lateral = 0, lateralVel = 0, targetLateral = 0;
@@ -241,7 +258,7 @@ class HeroSim {
     activeRail = pendingRail = activeWall = activeTransfer = -1;
     railCd = wallCd = 0;
     finaleFlip = false;
-    voltage = 0;
+    voltage = 1.8;
     boostBonus = 0;
     trauma = 0;
     hitStop = 0;
@@ -258,19 +275,132 @@ class HeroSim {
     transferDone = List.filled(transfers.length, false);
     nearMisses = 0;
     stumbles = 0;
+    ledger.clear();
     _bldgSignLit.clear();
     _corridorSigns = 0;
-    taxis
-      ..clear()
-      ..addAll([
-        for (final t in level.route['taxiLanes'] as List<dynamic>)
-          Vehicle(t as Map<String, dynamic>),
-      ]);
+    _setupTraffic();
     spline.sample(0, _now);
     x = _now.x;
     z = _now.z;
     y = 312;
     yaw = _now.yaw;
+  }
+
+  // ------------------------------------------------- traffic (demo port)
+  /// `_findGroundRoadSpans`: ground stretches ≥ 45 m with half-width ≥ 5.4.
+  List<List<double>> _groundSpans() {
+    final out = <List<double>>[];
+    final t = spline.length;
+    double n = -1;
+    final smp = RouteSample();
+    for (double r = 0; r <= t; r += 1) {
+      spline.sample(r, smp);
+      final ok = smp.y <= 0.35 && smp.halfWidth >= 5.4;
+      if (ok && n < 0) {
+        n = r;
+      } else if (!ok && n >= 0) {
+        final a = n < 20 ? 78.0 : n;
+        final b = math.min(r - 1, n < 20 ? 278.0 : 914.0);
+        if (b - a >= 45) out.add([a, b]);
+        n = -1;
+      }
+    }
+    if (n >= 0) {
+      final b = math.min(t - 20, 914.0);
+      if (b - n >= 45) out.add([n, b]);
+    }
+    return out;
+  }
+
+  late final List<Map<String, double>> _groundBarriers = [
+    for (final e in barriers)
+      if (((e['groundY'] as num?)?.toDouble() ?? 0) <= 0.35)
+        () {
+          final li = ((e['laneIndex'] as num?)?.round() ??
+                  (((e['lateral'] as num?)?.toDouble() ?? 0) / kLaneW).round())
+              .clamp(-1, 1);
+          final bi = li == 0 ? 1 : 0;
+          return {
+            's': (e['s'] as num).toDouble(),
+            'lane': li.toDouble(),
+            'bypass': kLaneW * bi,
+          };
+        }(),
+  ];
+
+  /// `_computeBarrierWeave`: lane traffic swerves around street barriers.
+  (double, double) _weave(int lane, double t) {
+    final r = kLaneW * lane;
+    for (final o in _groundBarriers) {
+      if (o['lane']!.toInt() != lane) continue;
+      final os = o['s']!;
+      final s0 = os - 28, c = os - 6, l = os + 6, u = os + 24;
+      if (t < s0 || t > u) continue;
+      final d = o['bypass']! - r;
+      if (t < c) {
+        final e = _clamp((t - s0) / 22, 0, 1);
+        return (r + d * smootherstep(e), d * 30 * e * e * (1 - e) * (1 - e) / 22);
+      }
+      if (t <= l) return (o['bypass']!, 0);
+      final f = _clamp((t - l) / 18, 0, 1);
+      return (r + d * (1 - smootherstep(f)), d * -30 * f * f * (1 - f) * (1 - f) / 18);
+    }
+    return (r, 0);
+  }
+
+  void _setupTraffic() {
+    taxis.clear();
+    final spans = _groundSpans();
+    final buckets = <String, List<Vehicle>>{};
+    List<Vehicle> bucket(int span, int lane) => buckets.putIfAbsent('$span:$lane', () => []);
+    final smp = RouteSample();
+    for (final o in level.route['hazards'] as List<dynamic>) {
+      if (taxis.length >= 32) break;
+      if (o['type'] != 'taxi_lane') continue;
+      final os = (o['s'] as num).toDouble();
+      final mid = _lerp(os, ((o['endS'] as num?)?.toDouble() ?? os + 60), 0.5);
+      if (spline.sample(mid, smp).y > 0.35) continue;
+      final lat = (o['lateral'] as num?)?.toDouble() ?? 0;
+      final lane = ((o['laneIndex'] as num?)?.round() ?? (lat < -1.8 ? -1 : (lat > 1.8 ? 1 : 0))).clamp(-1, 1);
+      var si = spans.indexWhere((e) => os >= e[0] - 25 && os <= e[1] + 25);
+      if (si < 0) si = os < 500 ? 0 : math.max(0, spans.length - 1);
+      final v = Vehicle((o['vehicleType'] as String?) ?? kFleetTypes[taxis.length % 5], lane);
+      taxis.add(v);
+      bucket(si, lane).add(v);
+    }
+    const caps = [[0, -1, 6], [0, 0, 6], [0, 1, 6], [1, -1, 5], [1, 0, 4], [1, 1, 5]];
+    for (final c in caps) {
+      if (spans.isEmpty) break;
+      final b = bucket(math.min(c[0], spans.length - 1), c[1]);
+      while (b.length < c[2] && taxis.length < 32) {
+        final v = Vehicle(kFleetTypes[taxis.length % 5], c[1]);
+        taxis.add(v);
+        b.add(v);
+      }
+    }
+    const slotCfg = [
+      [7.0, 13.4, 0.0, {-1: [0.0, 1, 2, 3, 5, 6], 0: [0.5, 1.5, 2.5, 3.5, 5.5, 6.5], 1: [0.0, 1, 2, 4, 5, 6]}],
+      [6.0, 14.4, 0.1, {-1: [0.0, 1, 2, 3, 5], 0: [0.5, 1.5, 3.5, 4.5], 1: [0.0, 1, 2, 4, 5]}],
+    ];
+    buckets.forEach((key, items) {
+      final parts = key.split(':');
+      final spanIdx = int.parse(parts[0]), lane = int.parse(parts[1]);
+      final span = spans[spanIdx];
+      final o = math.max(40.0, span[1] - span[0]);
+      final cfg = slotCfg[spanIdx % 2];
+      final l = o / (cfg[0] as double);
+      final lanes = (cfg[3] as Map<int, List<num>>)[lane] ?? [0, 1, 2, 3, 4, 5];
+      for (int e = 0; e < items.length; e++) {
+        final v = items[e];
+        v.startS = span[0];
+        v.endS = span[1];
+        v.laneLateral = kLaneW * lane;
+        v.speed = cfg[1] as double;
+        final slot = e < lanes.length ? lanes[e].toDouble() : e + (lane == 0 ? 0.5 : 0);
+        v.s = span[0] + ((slot + (cfg[2] as double)) * l) % o;
+        v.lateral = _weave(lane, v.s).$1;
+      }
+    });
   }
 
   // ------------------------------------------------------------- input
@@ -365,6 +495,7 @@ class HeroSim {
         grounded = true;
         timeSinceLand = 0;
         trauma = math.max(trauma, 0.32);
+        voltage = math.max(voltage, 3.6);
       }
       timeSinceLand += dt;
       speed = _lerp(0, 9, smoothstep(0.2, 1, _clamp((n - 3.05) / 0.23, 0, 1)));
@@ -782,7 +913,8 @@ class HeroSim {
       speed = math.min(44.8, math.max(speed + 5.5 * 0.3, 32.5));
       trauma = math.max(trauma, 0.26);
       hitStop = math.max(hitStop, 0.028);
-      final pts = state.award(((t.data['bonusPts'] as num?) ?? 1200).toInt());
+      final pts = _award('transfer', t.data['label'] as String? ?? 'TRANSFER',
+          ((t.data['bonusPts'] as num?) ?? 1200).toInt());
       _popup('WALL TO RAIL TRANSFER', bonus: pts);
     }
     return true;
@@ -860,8 +992,8 @@ class HeroSim {
         boostBonus = math.min(5.5, boostBonus + 2.4);
         speed = _clamp(speed + 1.8, 25, 45.8);
         trauma = math.max(trauma, 0.18);
-        state.score += 900;
-        state.showCallout('NEON SLIDE', bonus: '+900', accent: CalloutAccent.neonSlide);
+        _award('neon_slide', 'NEON SLIDE', 1500, scaled: false);
+        state.showCallout('NEON SLIDE', bonus: '+1,500', accent: CalloutAccent.neonSlide);
       } else if (y < top + 0.15) {
         portalDone[i] = true;
         y = gy;
@@ -927,7 +1059,7 @@ class HeroSim {
         speed = _clamp(speed + 2.2, 24, 45.8);
         canRoofVault = true;
         trauma = math.max(trauma, 0.2);
-        state.score += 750;
+        _award('roof_vault', 'ROOF VAULT', 750, scaled: false);
         state.showCallout('ROOF VAULT', bonus: '+750', accent: CalloutAccent.vault);
       } else if (t.hoodCd <= 0) {
         // ran into the car: HOOD BOUNCE
@@ -975,7 +1107,8 @@ class HeroSim {
         speed = _clamp(speed + 6.5 * 0.35, 27, 45.8);
         trauma = math.max(trauma, 0.22);
         hitStop = math.max(hitStop, 0.024);
-        final pts = state.award(((r['bonusPts'] as num?) ?? 400).toInt());
+        final pts = _award('boost_ring', r['label'] as String? ?? 'BOOST RING',
+            ((r['bonusPts'] as num?) ?? 400).toInt());
         _popup('BOOST RING', bonus: pts, accent: CalloutAccent.vault);
       }
     }
@@ -999,7 +1132,7 @@ class HeroSim {
       speed = _clamp(speed + 3.5 * 0.3, 24, 45.8);
       trauma = math.max(trauma, 0.18);
       final drift = t.type != 'CrownComfortTaxi';
-      final pts = state.award(500);
+      final pts = _award('near_miss', drift ? 'TOKYO DRIFT NEAR MISS' : 'NEAR MISS TAXI', 500);
       _popup(drift ? 'TOKYO DRIFT NEAR MISS' : 'NEAR MISS',
           bonus: pts, accent: CalloutAccent.gold);
     }
@@ -1014,7 +1147,7 @@ class HeroSim {
         state.combo = math.min(12, state.combo + 1);
         boostBonus = math.min(5.5, boostBonus + 1.92);
         speed = _clamp(speed + 1.2, 24, 45.8);
-        final pts = state.award(600);
+        final pts = _award('near_miss', 'TOKYO DRIFT NEAR MISS', 600);
         _popup('TOKYO DRIFT NEAR MISS', bonus: pts, accent: CalloutAccent.gold);
       }
     }
@@ -1036,9 +1169,18 @@ class HeroSim {
         state.combo = math.min(12, state.combo + 1);
         trauma = math.max(trauma, 0.24);
         hitStop = math.max(hitStop, 0.035);
-        state.award(250);
+        _award('sign', g['label'] as String? ?? 'GATE', 250);
       }
     }
+  }
+
+  /// Debug ledger mirroring the demo's `ignitionLedger` (kind, label, pts, t).
+  final List<String> ledger = [];
+  int _award(String kind, String label, int base, {bool scaled = true}) {
+    final pts = scaled ? state.award(base) : base;
+    if (!scaled) state.score += base;
+    ledger.add('$kind|$label|$pts|${state.runTimeSec.toStringAsFixed(2)}');
+    return pts;
   }
 
   final Set<int> _bldgSignLit = {};
@@ -1058,7 +1200,7 @@ class HeroSim {
       if (dx * dx + dz * dz <= 1444) {
         _bldgSignLit.add(t);
         _corridorSigns++;
-        state.award(150);
+        _award('sign', n['sign'] as String? ?? 'SHIBUYA', 150);
         break;
       }
     }
@@ -1087,7 +1229,7 @@ class HeroSim {
     state.combo = math.min(12, state.combo + 1);
     trauma = math.max(trauma, 0.3);
     if (e == 5) {
-      state.award(1500);
+      _award('google_tower', 'Google Shibuya Stream', 1500);
     }
     if (state.googleLettersLit.every((x) => x)) {
       // The HUD shows "GOOGLE IGNITED!" once all six letters are lit.
@@ -1119,7 +1261,7 @@ class HeroSim {
       yaw = ((level.meta['googleTower'] as Map<String, dynamic>)['facingYaw'] as num).toDouble();
       voltage = 15;
       trauma = math.max(trauma, 0.36);
-      state.award(1000);
+      _award('beacon', 'Rooftop Pin', 1000);
       state.enterFinale();
     }
   }
@@ -1131,6 +1273,7 @@ class HeroSim {
 
   void _updateTraffic(double dt) {
     for (final t in taxis) {
+      if (!t.active) continue;
       if (t.nearMissCd > 0) t.nearMissCd = math.max(0, t.nearMissCd - dt);
       if (t.roofVaultCd > 0) t.roofVaultCd = math.max(0, t.roofVaultCd - dt);
       if (t.hoodCd > 0) t.hoodCd = math.max(0, t.hoodCd - dt);
@@ -1143,26 +1286,46 @@ class HeroSim {
         t.active = false;
         continue;
       }
+      final (lat, dLat) = _weave(t.laneIndex, t.s);
+      t.lateral = _clamp(lat, -3.6, 3.6);
       t.x = _tmp.x + _tmp.rx * t.lateral;
       t.y = math.max(0, _tmp.y);
       t.z = _tmp.z + _tmp.rz * t.lateral;
-      t.yaw = t.dir >= 0 ? _tmp.yaw : _tmp.yaw + math.pi;
+      final la = math.atan(dLat);
+      t.yaw = t.dir >= 0 ? _tmp.yaw - la : _tmp.yaw + math.pi + la;
     }
-    // Drift cars circle the Scramble on an ellipse.
-    final cx = (driftCenter[0] as num).toDouble(), cz = (driftCenter[2] as num).toDouble();
-    final ax = (driftAxes[0] as num).toDouble(), az = (driftAxes[1] as num).toDouble();
-    const perim = 108.4;
+    // Drift cars lap the exported Scramble drift loop; like the demo they
+    // brake (4.2 m/s) when Pegman is just ahead and surge (20 m/s) when he
+    // is just behind, so the near-miss passes line up.
+    final loop = _driftLoop;
+    final total = loop.length;
     for (final c in drift) {
       if (c.nearMissCd > 0) c.nearMissCd = math.max(0, c.nearMissCd - dt);
-      c.phase = (c.phase + c.speed * dt / perim) % 1;
-      final a = c.phase * math.pi * 2;
-      final lx = math.cos(a) * ax, lz = math.sin(a) * az;
-      final ca = math.cos(driftAngle), sa = math.sin(driftAngle);
-      c.x = cx + lx * ca - lz * sa;
-      c.z = cz + lx * sa + lz * ca;
-      final dx = -math.sin(a) * ax, dz = math.cos(a) * az;
-      final tx = dx * ca - dz * sa, tz = dx * sa + dz * ca;
-      c.yaw = math.atan2(tx, tz) + 0.42;
+      var target = 13.5;
+      if (state.phase == AppPhase.playing && s >= 8 && s <= 92 && y < 2.2) {
+        final tan = vm.Vector3.zero();
+        final p = loop.at(c.phase, tan);
+        final nx = x - p.x, nz = z - p.z;
+        if (math.sqrt(nx * nx + nz * nz) < 22) {
+          final along = nx * tan.x + nz * tan.z;
+          if (along > -4.5 && along < 18) {
+            target = 4.2;
+          } else if (along <= -4.5 && along > -17) {
+            target = 20;
+          }
+        }
+      }
+      if (dt > 1e-6) {
+        final k = 12 * dt;
+        c.speed = _clamp(c.speed + _clamp(target - c.speed, -k, k), 4, 20.5);
+        c.phase = (c.phase + c.speed * dt / total) % 1;
+      }
+      final tan = vm.Vector3.zero();
+      final p = loop.at(c.phase, tan);
+      c.x = p.x;
+      c.z = p.z;
+      final wob = math.sin(elapsed * 3.4 + drift.indexOf(c) * 1.57) * 0.04;
+      c.yaw = math.atan2(tan.x, tan.z) + (-0.42 - wob);
     }
   }
 

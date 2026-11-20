@@ -362,8 +362,6 @@ class ShibuyaSceneController {
             l.baseEmissive.x * k, l.baseEmissive.y * k, l.baseEmissive.z * k, 1);
       }
     }
-    final pulse = 1.6 + 1.2 * (0.5 + 0.5 * math.sin(_time * 3.2));
-    world.beaconMat?.emissiveFactor = hexColor('#FBBC05', pulse);
     world.glbWorld.updateSigns(sim.s, 1 / 60, _time,
         finale: state.phase == AppPhase.finale,
         reset: state.phase == AppPhase.skyDrop || state.phase == AppPhase.mapsTitle);

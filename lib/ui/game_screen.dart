@@ -93,6 +93,12 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
           _controller.tick(1 / 60);
         }
         final c = _controller;
+        if (_q['ledger'] == '1') {
+          for (final l in c.sim.ledger) {
+            debugPrint('ledger|$l');
+          }
+          debugPrint('ledger|score|${_state.score}|nm=${c.sim.nearMisses} st=${c.sim.stumbles}');
+        }
         debugPrint('seekm: $i steps -> s=${c.sim.s.toStringAsFixed(1)} '
             'hero=(${c.sim.x.toStringAsFixed(2)},${c.sim.y.toStringAsFixed(2)},${c.sim.z.toStringAsFixed(2)}) '
             'cam=(${c.camPos.x.toStringAsFixed(2)},${c.camPos.y.toStringAsFixed(2)},${c.camPos.z.toStringAsFixed(2)}) fov=${c.camFov.toStringAsFixed(1)}');

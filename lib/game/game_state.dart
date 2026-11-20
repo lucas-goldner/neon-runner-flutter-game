@@ -199,6 +199,7 @@ class GameState extends ChangeNotifier {
 
   void enterFinale() {
     phase = AppPhase.finale;
+    autoPilot = false; // the demo drops Auto-Pilot once the run completes
     move = ParkourMove.finaleOrbit;
     onboardingVisible = false;
     streetPill = null;

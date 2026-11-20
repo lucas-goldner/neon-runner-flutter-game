@@ -239,7 +239,7 @@ class ShibuyaWorld {
         final t = (e + 0.5) / cnt;
         // stripe: width w across the walk, depth g along it
         paint.box(w3(ax + sx * t, 0.025, az + sz * t), vm.Vector3(w, 0.004, g),
-            mirrorYaw(yaw + math.pi / 2));
+            mirrorYaw(yaw));
       }
     }
     // Lane dashes (±1.8) and edge lines (±5.4) every 7.5 m along the route.
