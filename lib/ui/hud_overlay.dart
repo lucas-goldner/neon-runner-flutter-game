@@ -5,6 +5,7 @@ import '../game/level_data.dart';
 import 'hud_icons.dart';
 import 'maps_title_card.dart';
 import 'minimap.dart';
+import 'street_pill.dart';
 import 'ui_tokens.dart';
 
 /// In-game HUD layer matching the web demo's `.hud-layer` pills:
@@ -82,6 +83,14 @@ class HudOverlay extends StatelessWidget {
             ],
           ),
         ),
+
+        if (!photo && !finale && state.streetPill != null)
+          Positioned(
+            right: 20,
+            bottom: compact ? 190 : 208,
+            child: IgnorePointer(
+                child: StreetEntryPill(pill: state.streetPill!, compact: compact)),
+          ),
 
         if (!photo && state.onboardingVisible && !finale)
           const Positioned(

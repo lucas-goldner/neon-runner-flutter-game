@@ -138,6 +138,8 @@ class HeroSim {
           ja: _shortJa(seg['ja'] as String),
           miniEn: _miniEn(seg['en'] as String),
           shield: seg['shield'] as String?,
+          shortEn: (seg['shortEn'] as String?) ?? '',
+          isRail: seg['isRail'] == true,
         ),
     ];
     final loop = r['scrambleDriftLoop'] as Map<String, dynamic>;
@@ -324,7 +326,6 @@ class HeroSim {
       _syncState(dt);
       return;
     }
-    state.runTimeSec += 0; // runTime advanced by GameState.tick
     final pY = y;
     final pGrounded = grounded;
     _stepParkour(dt);
@@ -1040,8 +1041,11 @@ class HeroSim {
     state.combo = math.min(12, state.combo + 1);
     trauma = math.max(trauma, 0.3);
     if (e == 5) {
-      final pts = state.award(1500);
-      _popup('GOOGLE SHIBUYA IGNITED', bonus: pts, accent: CalloutAccent.google);
+      state.award(1500);
+    }
+    if (state.googleLettersLit.every((x) => x)) {
+      // The HUD shows "GOOGLE IGNITED!" once all six letters are lit.
+      state.showCallout('GOOGLE IGNITED!', accent: CalloutAccent.google);
     }
   }
 
@@ -1128,7 +1132,11 @@ class HeroSim {
     state.heroHeading = yaw;
     for (final seg in segments) {
       if (s >= seg.sStart && s < seg.sEnd + (seg == segments.last ? 1 : 0)) {
-        state.street = seg;
+        if (!identical(state.street, seg)) {
+          final first = state.street == null;
+          state.street = seg;
+          if (!first) state.showStreetPill(seg);
+        }
         break;
       }
     }

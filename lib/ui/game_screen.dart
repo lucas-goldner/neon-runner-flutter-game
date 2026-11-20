@@ -62,6 +62,11 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     _debugHooks();
     // `?sim=N` runs N simulation substeps per frame (debug fast-forward).
     final sub = int.tryParse(_q['sim'] ?? '') ?? 1;
+    // `&freeze=1` holds the frame right after a seek (debug captures).
+    if (_q['freeze'] == '1' && _seekDone) {
+      _controller.tick(0.0001);
+      return;
+    }
     for (int i = 0; i < sub; i++) {
       _controller.tick(dt);
     }
@@ -79,9 +84,19 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
       _seekDone = true;
       _controller.sim.seek(seek);
     }
+    // `?seekm=<meters>`: like the demo's __seekRouteProgress — fast-forward
+    // the real simulation on Auto-Pilot at 60 Hz until the hero reaches s.
+    final seekm = double.tryParse(_q['seekm'] ?? '');
+    if (seekm != null && !_seekDone && _state.phase == AppPhase.playing) {
+      _seekDone = true;
+      if (!_state.autoPilot) _state.toggleAutoPilot();
+      for (int i = 0; i < 5400 && _controller.sim.s < seekm && _state.phase == AppPhase.playing; i++) {
+        _controller.tick(1 / 60);
+      }
+    }
     final photo = _q['photo'];
     if (photo != null && !_state.photoMode && _seekDone && _state.isGameplay &&
-        _state.phase == AppPhase.finale) {
+        (_state.phase == AppPhase.finale || _q['photoNow'] == '1')) {
       _state.setPhotoPreset(PhotoPreset.values.firstWhere((p) => p.name == photo,
           orElse: () => PhotoPreset.hero));
       _state.togglePhotoMode();

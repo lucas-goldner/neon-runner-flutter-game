@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../game/game_state.dart';
 import '../game/level_data.dart';
+import 'street_pill.dart';
 import 'ui_tokens.dart';
 
 /// `.hud-pill-minimap`: street header + live 244×136 dark-mode OSM minimap
@@ -30,12 +31,22 @@ class MinimapPill extends StatelessWidget {
             constraints: const BoxConstraints(minHeight: 19),
             padding: const EdgeInsets.symmetric(horizontal: 2),
             alignment: Alignment.centerLeft,
-            child: Text(
-              _header(state.street),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: Ui.ui(compact ? 11 : 12,
-                  weight: FontWeight.w600, height: 1.25),
+            child: Row(
+              children: [
+                Flexible(
+                  child: Text(
+                    _header(state.street),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Ui.ui(compact ? 11 : 12,
+                        weight: FontWeight.w600, height: 1.25),
+                  ),
+                ),
+                if ((state.street?.shield ?? '').isNotEmpty) ...[
+                  SizedBox(width: compact ? 4 : 5),
+                  MlitShield(state.street!.shield!),
+                ],
+              ],
             ),
           ),
           const SizedBox(height: 5),
@@ -89,10 +100,7 @@ class MinimapPill extends StatelessWidget {
 /// `${shortJa} · ${miniEn}` plus ` [shield]` like the web demo's header.
 String _header(StreetSegment? s) {
   if (s == null) return '渋谷スクランブル · Scramble';
-  final shield = s.shield;
-  return shield == null || shield.isEmpty
-      ? s.headerLabel
-      : '${s.headerLabel} [$shield]';
+  return s.headerLabel;
 }
 
 class _MinimapCanvas extends StatefulWidget {

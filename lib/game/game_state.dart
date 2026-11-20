@@ -39,7 +39,7 @@ class ActionCallout {
     required this.bonus,
     required this.accent,
     required this.createdAt,
-    this.duration = 1.6,
+    this.duration = 1.85,
   });
 
   final int id;
@@ -52,6 +52,17 @@ class ActionCallout {
   final double duration;
 }
 
+/// Street-entry pill shown for 1.8 s of sim time when entering a street.
+class StreetPill {
+  StreetPill(this.id, this.ja, this.en, this.shield, this.isRail, this.createdAt);
+  final int id;
+  final String ja;
+  final String en;
+  final String? shield;
+  final bool isRail;
+  final double createdAt;
+}
+
 /// One named street segment of the route (minimap header).
 class StreetSegment {
   const StreetSegment({
@@ -60,7 +71,12 @@ class StreetSegment {
     required this.ja,
     required this.miniEn,
     this.shield,
+    this.shortEn = '',
+    this.isRail = false,
   });
+
+  final String shortEn;
+  final bool isRail;
 
   final double sStart;
   final double sEnd;
@@ -117,6 +133,8 @@ class GameState extends ChangeNotifier {
 
   ActionCallout? callout;
   int _nextCalloutId = 1;
+  StreetPill? streetPill;
+  double _playTime = 0;
 
   bool get isGameplay =>
       phase == AppPhase.skyDrop ||
@@ -164,6 +182,7 @@ class GameState extends ChangeNotifier {
     photoPreset = PhotoPreset.hero;
     onboardingVisible = false;
     callout = null;
+    streetPill = null;
     for (int i = 0; i < 6; i++) {
       googleLettersLit[i] = false;
     }
@@ -173,7 +192,8 @@ class GameState extends ChangeNotifier {
   void landFromSkyDrop() {
     phase = AppPhase.playing;
     move = ParkourMove.sprint;
-    onboardingVisible = true;
+    _playTime = 0;
+    onboardingVisible = !autoPilot;
     notifyListeners();
   }
 
@@ -181,11 +201,13 @@ class GameState extends ChangeNotifier {
     phase = AppPhase.finale;
     move = ParkourMove.finaleOrbit;
     onboardingVisible = false;
+    streetPill = null;
     notifyListeners();
   }
 
   void toggleAutoPilot() {
     autoPilot = !autoPilot;
+    if (autoPilot) onboardingVisible = false;
     notifyListeners();
   }
 
@@ -215,7 +237,7 @@ class GameState extends ChangeNotifier {
     String label, {
     String bonus = '',
     CalloutAccent accent = CalloutAccent.neon,
-    double duration = 1.6,
+    double duration = 1.85,
   }) {
     callout = ActionCallout(
       id: _nextCalloutId++,
@@ -257,10 +279,27 @@ class GameState extends ChangeNotifier {
     return '${m.toString().padLeft(2, '0')}:${s.toStringAsFixed(1).padLeft(4, '0')}';
   }
 
+  void showStreetPill(StreetSegment seg) {
+    if (phase != AppPhase.playing || photoMode) return;
+    final en = seg.shortEn
+        .replaceAll(RegExp(r'^SCRAMBLE CROSSING$', caseSensitive: false), 'SCRAMBLE')
+        .replaceAll(RegExp(r'^TAMAGAWA-DORI R246$', caseSensitive: false), 'TAMAGAWA-DORI')
+        .replaceAll(RegExp(r'^MEIJI-DORI AVE$', caseSensitive: false), 'MEIJI-DORI')
+        .toUpperCase();
+    streetPill = StreetPill(_nextCalloutId++, seg.ja, en, seg.shield,
+        seg.isRail || seg.shield == 'LOOP', elapsed);
+  }
+
   /// Per-frame update from the controller; one notify per frame.
   void tick(double dt) {
     elapsed += dt;
-    if (phase == AppPhase.playing) runTimeSec += dt;
+    if (phase == AppPhase.playing) {
+      runTimeSec += dt;
+      _playTime += dt;
+      if (onboardingVisible && _playTime >= 4) onboardingVisible = false;
+    }
+    final sp = streetPill;
+    if (sp != null && (elapsed - sp.createdAt >= 1.8 || photoMode)) streetPill = null;
     if (speedKmh > maxSpeedKmh) maxSpeedKmh = speedKmh;
     final c = callout;
     if (c != null && elapsed - c.createdAt > c.duration) callout = null;
