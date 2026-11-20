@@ -523,7 +523,9 @@ class _MinimapPainter extends CustomPainter {
       final nn = (sw / .84).clamp(0.0, 1.0);
       final r = sw > .8 ? (1 - (sw - .8) / .2).clamp(0.0, 1.0) : 1.0;
       final i = nn * 272 - 14;
-      final rect = Rect.fromLTWH(math.max(0, i - 50), 0, 50, h);
+      // Drawn at its true position (the canvas clips it), so the gradient
+      // never clamps into a solid block while the sweep enters from the left.
+      final rect = Rect.fromLTWH(i - 50, 0, 50, h);
       canvas.drawRect(
         rect,
         Paint()

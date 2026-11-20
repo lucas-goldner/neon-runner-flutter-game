@@ -717,8 +717,8 @@ class NeonFx {
       positions: Float32List.fromList([-h, 0, -h, h, 0, -h, h, 0, h, -h, 0, h]),
       normals: Float32List.fromList([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]),
       texCoords: Float32List.fromList([0, 0, 1, 0, 1, 1, 0, 1]),
-      // CCW seen from +Y in the reference frame; refRoot's mirror flips it.
-      indices: [0, 2, 1, 0, 3, 2],
+      // Both windings: flutter_scene back-face culls translucent materials.
+      indices: [0, 2, 1, 0, 3, 2, 0, 1, 2, 0, 2, 3],
     );
   }
 
@@ -733,7 +733,7 @@ class NeonFx {
       uv.addAll([i / segs, 0, i / segs, 1]);
       if (i < segs) {
         final b = i * 2;
-        idx.addAll([b, b + 1, b + 2, b + 1, b + 3, b + 2]);
+        idx.addAll([b, b + 1, b + 2, b + 1, b + 3, b + 2, b, b + 2, b + 1, b + 1, b + 2, b + 3]);
       }
     }
     return fs.MeshGeometry.fromArrays(

@@ -8,6 +8,7 @@ import 'glb_library.dart';
 import 'level_data.dart';
 import 'media_screen.dart';
 import 'mesh_buf.dart';
+import 'neon_arch.dart';
 import 'world_builder.dart';
 import 'world_textures.dart';
 
@@ -557,20 +558,11 @@ class GlbWorld {
 
   // ------------------------------------------------ neon slide arches
   void _slideArches() {
+    int k = 0;
     for (final r in level.route['slidePortals'] as List<dynamic>) {
-      final t = GlbLibrary.template(lib.props, 'NeonSlideArch');
-      if (t == null) return;
-      final p = r['pos'] as List<dynamic>;
-      final jp = r['style'] == 'torii_neon_jp' || r['crestNodeName'] == 'NeonArch_CrestJP';
-      t.localTransform = GlbLibrary.slot(
-          _d(p[0]), _d(r['groundY'], _d(p[1])), _d(p[2]), _d(r['yaw']) + math.pi);
-      t.getChildByName('NeonArch_CrestEN')?.visible = !jp;
-      t.getChildByName('NeonArch_CrestJP')?.visible = jp;
-      final cyan = _litMaterial(t, 'NeonArch_PlasmaCyan', jp ? '#1E88FF' : '#00D4FF');
-      _litMaterial(t, 'NeonArch_PlasmaOrange', jp ? '#FFB300' : '#FF3D00').setLit(true);
-      cyan.setLit(true);
-      world.slidePortals.add(cyan);
-      ref.add(t);
+      final rig = NeonArchRig.build(lib.props, ref, r as Map<String, dynamic>, k++);
+      if (rig != null) world.archRigs.add(rig);
     }
   }
+
 }

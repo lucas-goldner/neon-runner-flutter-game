@@ -6,6 +6,7 @@ import 'package:vector_math/vector_math.dart' as vm;
 import 'glb_library.dart';
 import 'level_data.dart';
 import 'mesh_buf.dart';
+import 'neon_arch.dart';
 import 'osm_city.dart';
 import 'route_spline.dart';
 import 'world_glb.dart';
@@ -90,6 +91,7 @@ class ShibuyaWorld {
   final List<RingProp> rings = [];
   final List<GlowProp> pinGates = [];
   final List<GlowProp> slidePortals = [];
+  final List<NeonArchRig> archRigs = [];
   final List<GlowProp> googleLetters = [];
   final List<GlowProp> bladeSigns = [];
   /// One material per grind rail (index = route grindRails order).

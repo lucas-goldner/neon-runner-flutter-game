@@ -137,11 +137,16 @@ class ShibuyaSceneController {
       // staticSun 0.56 + heroSun 0.68: both light everything (E_ rig).
       intensity: 0.56 + 0.68,
     );
+    // The demo has no scene fog: each world material blends toward its haze
+    // colour (default (.095,.17,.31)) by 1 - exp(-3.2e-4 * max(0, d - 12)),
+    // capped at 0.62 (the Mh/Ih "aerial perspective" chunk).
     scene.fog
       ..enabled = true
       ..mode = fs.FogMode.exponential
-      ..color = vm.Vector3(0.0130, 0.0343, 0.1046)
-      ..density = 0.0032;
+      ..color = vm.Vector3(0.095, 0.17, 0.31)
+      ..density = 3.2e-4
+      ..start = 12
+      ..maxOpacity = 0.62;
     // The demo's bloom is a 3 px, 13-tap soft-knee blur (strength 0.18):
     // practically no halo, so the engine's wide bloom stays off.
     scene.postProcess.bloom.enabled = false;
@@ -269,8 +274,8 @@ class ShibuyaSceneController {
     for (final r in world.rings) {
       r.glow.flash = 0;
     }
-    for (final p in world.slidePortals) {
-      p.setLit(false);
+    for (final a in world.archRigs) {
+      a.reset();
     }
     for (final l in world.googleLetters) {
       l.material.emissiveFactor = l.baseEmissive * 0.04;
@@ -402,9 +407,14 @@ class ShibuyaSceneController {
       world.wallRunMats[i].emissiveFactor = hexColor('#38BDF8', sim.activeWall == i ? 2.6 : 0.95);
     }
     _syncPlasma(1 / 60);
-    for (int i = 0; i < world.slidePortals.length; i++) {
-      final lit = sim.portalDone[i];
-      if (world.slidePortals[i].lit != lit) world.slidePortals[i].setLit(lit);
+    final cars = [
+      for (final t in sim.taxis)
+        if (t.active) (x: t.x, z: t.z),
+      for (final c in sim.drift) (x: c.x, z: c.z),
+    ];
+    for (int i = 0; i < world.archRigs.length; i++) {
+      world.archRigs[i].sync(state.photoMode ? 0 : 1 / 60, _time, sim.s,
+          state.phase == AppPhase.finale, i < sim.portalDone.length && sim.portalDone[i], _mapsMorph, cars);
     }
     for (final l in world.googleLetters) {
       final i = l.letterIndex;
@@ -549,6 +559,7 @@ class ShibuyaSceneController {
           fx.spawnArc(hero, p, 0.26);
           fx.sparkBurst(p, 16, 1.3, 3.2, math.max(0, p.y - 3.2));
         case 'neonSlide':
+          if (e.index < world.archRigs.length) world.archRigs[e.index].igniteNow();
           final pt = sim.portals[e.index];
           final pp = pt['pos'] as List<dynamic>;
           final px = (pp[0] as num).toDouble(), pz = (pp[2] as num).toDouble();
@@ -870,6 +881,16 @@ class ShibuyaSceneController {
       }
       _springPos.setValues(nx, ny, nz);
       _springTgt.setValues(ox, oy, oz);
+      // _applyCameraFromSnapshot: ease out of the title camera
+      // (50, 515, 114) over the first 30% of the drop.
+      final tt = 1 - _sStep(0, 0.3, _clamp(w / 3.5, 0, 1));
+      if (tt > 1e-4) {
+        nx += (50 - 68) * tt;
+        ny += (515 - 435) * tt;
+        nz += 46 * tt;
+        ox += (50 - 68) * tt;
+        oz += 46 * tt;
+      }
       camPos.setValues(nx + sx, ny + sy, nz);
       camTarget.setValues(ox, oy, oz);
       camFov = fv;

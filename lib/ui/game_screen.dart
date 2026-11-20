@@ -43,6 +43,7 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
   bool _autoStarted = false;
   bool _seekDone = false;
   bool _stopped = false;
+  bool _stopAfterNext = false;
   int _runFrames = 0;
 
   @override
@@ -74,6 +75,10 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     for (int i = 0; i < sub; i++) {
       _controller.tick(dt);
     }
+    if (_stopAfterNext) {
+      _stopped = true;
+      debugPrint('stopped: ffframes');
+    }
     // `&stopat=<meters>`: run live, then hold the frame once the hero
     // reaches that route distance (debug captures of in-motion FX).
     // `&stopframe=N`: hold after N ticks of the run (sky-drop captures).
@@ -104,6 +109,17 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     }
     // `?seekm=<meters>`: like the demo's __seekRouteProgress — fast-forward
     // the real simulation on Auto-Pilot at 60 Hz until the hero reaches s.
+    // `?ffframes=N`: simulate the first N ticks (1/60 s) of the run
+    // synchronously, then hold (frame-exact sky-drop captures).
+    final ff = int.tryParse(_q['ffframes'] ?? '');
+    if (ff != null && !_seekDone && _state.phase == AppPhase.skyDrop) {
+      _seekDone = true;
+      for (int i = 1; i < ff; i++) {
+        _controller.tick(1 / 60);
+      }
+      _stopAfterNext = true;
+      debugPrint('ffframes: $ff s=${_controller.sim.s.toStringAsFixed(1)} phase=${_state.phase.name}');
+    }
     final seekm = double.tryParse(_q['seekm'] ?? '');
     if (seekm != null && !_seekDone && _state.phase == AppPhase.skyDrop) {
       for (int i = 0; i < 600 && _state.phase == AppPhase.skyDrop; i++) {
