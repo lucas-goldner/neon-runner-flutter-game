@@ -808,25 +808,37 @@ class ShibuyaWorld {
         'google_stream_tower');
     _add(roofs, pbr(hexColor('#1E293B'), emissive: hexColor('#111A2C')), 'google_roof');
 
-    // "Google" sign: six coloured letter blocks on the facade.
+    // "Google" sign: six glyph panels on the facade, ordered left→right as
+    // seen from the street (viewer right = (nz, -nx) in the reference frame).
     final sc = gt['signCenter'] as List<dynamic>;
     final n = gt['facadeNormal'] as List<dynamic>;
     final nx = (n[0] as num).toDouble(), nz = (n[2] as num).toDouble();
-    final tx = -nz, tz = nx;
+    final rx = nz, rz = -nx;
     final colors = ['#4285F4', '#EA4335', '#FBBC05', '#4285F4', '#34A853', '#EA4335'];
-    final yaw = yawFromDir(nx, nz);
+    final backing = MeshBuf();
+    final scx = (sc[0] as num).toDouble(), scy = (sc[1] as num).toDouble();
+    final scz = (sc[2] as num).toDouble();
+    backing.box(w3(scx + nx * 0.3, scy, scz + nz * 0.3),
+        vm.Vector3(21, 5.6, 0.3), yawFromDir(nx, nz));
+    _add(backing, pbr(hexColor('#0B1020'), roughness: 0.5), 'google_sign_backing');
+    const lw = 3.2, lh = 4.0;
     for (int i = 0; i < 6; i++) {
-      final off = (i - 2.5) * 3.2;
-      final x = (sc[0] as num).toDouble() + tx * off + nx * 0.6;
-      final z = (sc[2] as num).toDouble() + tz * off + nz * 0.6;
+      final off = (i - 2.5) * lw;
+      final cx = scx + rx * off + nx * 0.5, cz = scz + rz * off + nz * 0.5;
+      final buf = MeshBuf();
+      buf.quad(
+        w3(cx - rx * lw / 2, scy - lh / 2, cz - rz * lw / 2),
+        w3(cx + rx * lw / 2, scy - lh / 2, cz + rz * lw / 2),
+        w3(cx + rx * lw / 2, scy + lh / 2, cz + rz * lw / 2),
+        w3(cx - rx * lw / 2, scy + lh / 2, cz - rz * lw / 2),
+        vm.Vector3(nx, 0, -nz),
+        u0: 0, u1: 1, v0: 1, v1: 0,
+      );
       final em = hexColor(colors[i], 3.4);
-      final m = pbr(hexColor(colors[i], 0.35), emissive: vm.Vector4(0.02, 0.02, 0.03, 1));
-      final h = (i == 3) ? 3.6 : (i == 4 ? 3.9 : 2.8);
-      root.add(fs.Node(
-          name: 'google_letter_$i',
-          mesh: fs.Mesh(fs.CuboidGeometry(vm.Vector3(2.3, h, 0.5)), m))
-        ..position = w3(x, (sc[1] as num).toDouble(), z)
-        ..rotation = yawQuat(yaw));
+      final m = pbr(hexColor(colors[i], 0.5), emissive: vm.Vector4(0.03, 0.03, 0.04, 1))
+        ..baseColorTexture = tex.googleGlyphs[i]
+        ..emissiveTexture = tex.googleGlyphs[i];
+      _add(buf, m, 'google_letter_$i');
       googleLetters.add(GlowProp(m, em, litScale: 1.0));
     }
 

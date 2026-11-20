@@ -18,6 +18,7 @@ class WorldTextures {
   late final fs.Texture2D shopBase;
   late final fs.Texture2D shopGlow;
   late final fs.Texture2D ground;
+  final List<fs.Texture2D> googleGlyphs = [];
 
   static Future<WorldTextures> create(ShibuyaLevel level) async {
     final t = WorldTextures();
@@ -34,6 +35,9 @@ class WorldTextures {
     t.shopBase = await fs.Texture2D.fromImage(sh.$1);
     t.shopGlow = await fs.Texture2D.fromImage(sh.$2);
     t.ground = await fs.Texture2D.fromImage(await _ground(level));
+    for (final ch in ['G', 'o', 'o', 'g', 'l', 'e']) {
+      t.googleGlyphs.add(await fs.Texture2D.fromImage(await _glyph(ch)));
+    }
     return t;
   }
 
@@ -96,6 +100,25 @@ class WorldTextures {
     final a = await rb.endRecording().toImage(w, h);
     final b = await re.endRecording().toImage(w, h);
     return (a, b);
+  }
+
+  /// White glyph on black for the emissive Google sign letters.
+  static Future<ui.Image> _glyph(String ch) async {
+    const w = 128, h = 160;
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.drawRect(const Rect.fromLTWH(0, 0, 128, 160), Paint()..color = const Color(0xFF000000));
+    final tp = TextPainter(
+      text: TextSpan(
+        text: ch,
+        style: const TextStyle(
+            fontFamily: 'Inter', fontSize: 132, fontWeight: FontWeight.w600,
+            color: Color(0xFFFFFFFF), height: 1.0),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout();
+    tp.paint(c, Offset((w - tp.width) / 2, (h - tp.height) / 2 - 8));
+    return rec.endRecording().toImage(w, h);
   }
 
   /// Ground-floor shopfront band: big warm-lit panes between dark mullions.

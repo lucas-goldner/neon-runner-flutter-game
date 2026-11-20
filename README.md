@@ -2,6 +2,7 @@
 
 A cross-platform 3D Flutter port of the **Gemini Neon Scramble** demo ([neon-scramble.ai.studio](https://neon-scramble.ai.studio/)), built with [`flutter_scene`](https://pub.dev/packages/flutter_scene) so the exact same Dart 3D codebase runs on **iOS**, **macOS**, and **Web**.
 
+- Map data © OpenStreetMap contributors (ODbL).
 - **iOS & macOS**: Renders natively through **Impeller + Flutter GPU** (Metal).
 - **Web**: Renders automatically through `flutter_scene`'s built-in **WebGL2** backend (works under both CanvasKit and Skwasm, with no extra flags).
 
@@ -56,17 +57,29 @@ flutter run -d ios --enable-flutter-gpu
 ## Project Layout
 
 ```text
+assets/
+├── data/shibuya_level.json   # Level data exported from the web demo's bundle:
+│                             # OSM route spline, 167 buildings w/ heights, roads,
+│                             # rails, rings, barriers, taxis, signs, Google tower
+└── fonts/                    # Inter + JetBrains Mono (the demo's CSS fonts)
 lib/
-├── main.dart                         # App entry & dark neon theme
+├── main.dart
 ├── game/
-│   ├── game_state.dart               # Screen/phase state machine, scoring, combo, route progress
-│   ├── neon_palette.dart             # Linear HDR emissive colors + UI palette
-│   ├── pegman_builder.dart           # Procedural 3D Pegman + magenta trail rig
-│   ├── shibuya_scene_controller.dart # Flutter Scene 3D world, pooling, collisions, camera
-│   └── sound_fx.dart                 # Cross-platform audio/haptic toggleable feedback
-└── ui/
-    ├── loading_screen.dart           # Loading Shibuya... overlay card
-    ├── map_overview_screen.dart      # Stylized Shibuya neon transit map & Play card
-    ├── hud_overlay.dart              # In-game HUD, popups, pause/game-over/victory cards
-    └── game_screen.dart              # SceneView host, Ticker loop, keyboard & swipe input
+│   ├── game_state.dart               # Phases (loading → title → sky drop → playing → finale), HUD state
+│   ├── level_data.dart               # Loads shibuya_level.json
+│   ├── route_spline.dart             # Route sampling + three.js → Flutter Scene (Z-mirror) helpers
+│   ├── hero_sim.dart                 # Port of the demo's sky drop, parkour physics, scoring, autopilot
+│   ├── world_builder.dart            # Extruded OSM city, viaduct, rails, props, Google tower
+│   ├── world_textures.dart           # Procedural window/brick/storefront/ground/glyph textures
+│   ├── mesh_buf.dart                 # Mesh batching + polygon triangulation
+│   ├── pegman_builder.dart           # Jointed procedural Pegman
+│   ├── shibuya_scene_controller.dart # Scene, traffic, rain, camera rigs (chase/sky-drop/finale/photo)
+│   └── sound_fx.dart
+└── ui/                               # Loading, title map, title card, HUD, minimap, callouts, finale, photo bar
 ```
+
+## Debug URL parameters (web)
+
+`?autoplay=1` starts a run with Auto-Pilot, `&seek=0.5` jumps to that route fraction after
+landing, `&sim=4` runs 4 simulation steps per frame, `&photo=skyline` opens photo mode at the
+finale. `lib/ui_preview_main.dart` is a UI-only preview harness (`?view=loading|title|hud|finale|photo`).
