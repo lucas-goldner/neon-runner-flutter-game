@@ -15,10 +15,17 @@ import 'world_builder.dart' show hexColor, pbr;
 class GlbPegman {
   GlbPegman(GlbLibrary lib) {
     root.add(flipPivot);
+    root.add(fs.Node(name: 'PegmanPointLight')
+      ..position = vm.Vector3(0, 0.22, -0.32)
+      ..addComponent(fs.PointLightComponent(light)));
     flipPivot.position = vm.Vector3(0, 0.86, 0);
     flipPivot.add(flipOffset);
     flipOffset.position = vm.Vector3(0, -0.86, 0);
-    final scene = lib.pegman.clone();
+    // The importer wraps the glTF in a z-mirroring root; the demo attaches
+    // the raw glTF scene, and this rig already lives under the mirrored
+    // reference-frame root, so drop the importer's mirror (otherwise every
+    // pitch - lean, dive, front flip - rotates the wrong way).
+    final scene = lib.pegman.clone()..localTransform = vm.Matrix4.identity();
     flipOffset.add(scene);
     void collect(fs.Node n) {
       if (n.name.isNotEmpty) nodes[n.name] = n;
@@ -57,6 +64,10 @@ class GlbPegman {
   }
 
   final fs.Node root = fs.Node(name: 'PegmanWorldRoot');
+
+  /// The demo's PointLight(#FFE680, .3, 10.5, 2) at (0, .22, -.32).
+  final fs.PointLight light = fs.PointLight(
+      color: vm.Vector3(1.0, 0.7913, 0.2232), intensity: 0.3, range: 10.5);
   final fs.Node flipPivot = fs.Node(name: 'PegmanFlipPivot');
   final fs.Node flipOffset = fs.Node(name: 'PegmanFlipOffset');
   final Map<String, fs.Node> nodes = {};

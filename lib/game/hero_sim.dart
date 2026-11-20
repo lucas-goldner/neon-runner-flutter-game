@@ -482,6 +482,8 @@ class HeroSim {
     _syncState(dt);
   }
 
+  double _dropVy = 0;
+
   void _stepSkyDrop(double dt) {
     if (dropClock <= 0) _emit('mapsExtrude');
     dropClock = math.min(kDropTime, dropClock + dt);
@@ -493,11 +495,14 @@ class HeroSim {
     spline.sample(0, _now);
     if (n < 0.9) {
       y = _now.y + _lerp(312, 272, smootherstep(n / 0.9));
+      _dropVy = -44 * (n / 0.9);
       speed = 0;
       grounded = false;
     } else if (n < 3.05) {
       final r = _clamp((n - 0.9) / 2.15, 0, 1);
+      final o = y;
       y = _now.y + 272 * math.pow(1 - r, 1.75);
+      _dropVy = (y - o) / math.max(1e-4, dt);
       speed = 0;
       grounded = false;
     } else if (n < 3.28) {
@@ -523,7 +528,7 @@ class HeroSim {
       y = _now.y;
     }
     groundY = _now.y;
-    vy = 0;
+    vy = grounded ? 0 : _dropVy;
     x = _now.x + _now.rx * lateral;
     z = _now.z + _now.rz * lateral;
     yaw = _now.yaw;

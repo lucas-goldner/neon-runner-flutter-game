@@ -42,6 +42,7 @@ class ShibuyaSceneController {
   final List<fs.Node> _taxiNodes = [];
   final List<fs.Node> _driftNodes = [];
   late final NeonFx fx;
+  double _hazardZap = 0;
   final FxFrame _fxf = FxFrame();
   PegmanPoseResult? _pose;
   double _mapsMorph = 0;
@@ -508,6 +509,16 @@ class ShibuyaSceneController {
       ..flipStyle = sim.flipStyle
       ..overchargeRatio = state.overchargeRatio;
     if (pose == PegmanPose.dance) p.time = _time;
+    // pegmanPointLight: intensity/colour from voltage, overcharge, hazards.
+    _hazardZap = math.max(0, _hazardZap - dt);
+    final oc = state.overchargeRatio;
+    pegman.light.intensity = _clamp(0.24 + sim.voltage / 15 * 0.1 + oc * 0.04, 0.24, 0.38);
+    if (_hazardZap / 0.42 > 0.05) {
+      pegman.light.color = vm.Vector3(0.3916, 0.0908, 0.9301); // #A855F7
+    } else {
+      final k = oc > 0.35 ? _clamp((oc - 0.35) * 0.75, 0, 0.45) : 0.0;
+      pegman.light.color = vm.Vector3(_lerp(1.0, 0.2051, k), _lerp(0.7913, 0.6584, k), _lerp(0.2232, 0.9734, k));
+    }
     final res = _poseSolver.solve(p);
     pegman.applyPose(res);
     _pose = res;
@@ -541,8 +552,10 @@ class ShibuyaSceneController {
         case 'roofVault':
           fx.roofVault(p);
         case 'carDeflect':
+          _hazardZap = math.max(_hazardZap, 0.36);
           fx.sparkBurst(p, 24, 1.35, 3.8, math.max(0, p.y - 0.85));
         case 'stumble':
+          _hazardZap = 0.42;
           fx.sparkBurst(p, 20, 1.25, 3.2, math.max(0, p.y - 0.5));
         case 'nearMiss':
         case 'driftNearMiss':
