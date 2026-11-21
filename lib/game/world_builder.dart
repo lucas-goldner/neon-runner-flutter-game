@@ -175,6 +175,10 @@ class ShibuyaWorld {
         // moonlit wet-asphalt sheen (three.js MeshStandardMaterial).
         pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 0.8, metallic: 1.0)
           ..metallicRoughnessTexture = tex.wetAsphalt
+          // wg() normal map, repeat 280 over 1180 m (one tile / 4.2 m), scale .1
+          ..normalTexture = tex.asphaltNormal
+          ..normalScale = 0.1
+          ..normalTextureTransform = fs.TextureTransform(scale: vm.Vector2.all(72 / (1180 / 280)))
           // three.js envMapIntensity .24 has no per-material twin here; specular
           // .5 matches the demo's ground reflections best (A/B'd at 320/680 m).
           ..specular = 0.5,
@@ -243,12 +247,22 @@ class ShibuyaWorld {
       for (final e in [-1.0, 1.0]) {
         final ox = l + g * e * 9.45, oz = u + gz * e * 9.45;
         if (inScramblePlaza(ox, oz)) continue;
-        side.box(w3(ox, i * 0.5, oz), vm.Vector3(r, i, y), yaw);
+        // BoxGeometry uvs scaled (r / 2.2, y / 2.2): one Eg tile per 2.2 m.
+        side.box(w3(ox, i * 0.5, oz), vm.Vector3(r, i, y), yaw, uScale: r / 2.2, vScale: y / 2.2);
         final fx = l + g * e * (n - a * 0.35), fz = u + gz * e * (n - a * 0.35);
         side.box(w3(fx, i * 0.42, fz), vm.Vector3(a, i * 0.84, y), yaw);
       }
     }
-    _add(side, pbr(hexColor('#1E2736'), roughness: 0.78, metallic: 0.06, emissive: hexColor('#0A101A')),
+    // color #1E2736 x Eg paving map, roughness .78 x Eg roughness map
+    // (72..130 per slab -> .22..40: each slab catches the moon), metal .06.
+    _add(
+        side,
+        fs.PhysicallyBasedMaterial(baseColorTexture: tex.sidewalk, metallicRoughnessTexture: tex.sidewalkRough)
+          ..baseColorFactor = hexColor('#1E2736')
+          ..roughnessFactor = 0.78
+          ..metallicFactor = 0.06
+          ..emissiveFactor = hexColor('#0A101A')
+          ..doubleSided = true,
         'ShibuyaGraniteSidewalks');
 
     void flat(double x, double z, double w, double len, double yawRef, [double y = 0.025]) {

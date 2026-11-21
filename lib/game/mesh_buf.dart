@@ -87,7 +87,7 @@ class MeshBuf {
 
   /// Axis-aligned-in-local-space box, rotated by [yaw] about Y.
   void box(vm.Vector3 center, vm.Vector3 size, double yaw,
-      {vm.Vector4? color}) {
+      {vm.Vector4? color, double uScale = 1, double vScale = 1}) {
     final hx = size.x / 2, hy = size.y / 2, hz = size.z / 2;
     final cy = math.cos(yaw), sy = math.sin(yaw);
     vm.Vector3 tr(double x, double y, double z) =>
@@ -102,7 +102,7 @@ class MeshBuf {
     ];
     // index = zi*4 + yi*2 + xi
     void face(int a, int b, int c, int d, vm.Vector3 n) =>
-        quad(p[a], p[b], p[c], p[d], n, color: color);
+        quad(p[a], p[b], p[c], p[d], n, color: color, u1: uScale, v1: vScale);
     face(0, 1, 3, 2, rn(0, 0, -1));
     face(4, 5, 7, 6, rn(0, 0, 1));
     face(0, 4, 6, 2, rn(-1, 0, 0));

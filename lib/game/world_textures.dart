@@ -21,6 +21,9 @@ class WorldTextures {
   late final fs.Texture2D ground;
   late final fs.Texture2D wallRun;
   late final fs.Texture2D hazardStripe;
+  late final fs.Texture2D sidewalk;
+  late final fs.Texture2D asphaltNormal;
+  late final fs.Texture2D sidewalkRough;
   late final fs.Texture2D wetAsphalt;
   final List<fs.Texture2D> googleGlyphs = [];
 
@@ -41,6 +44,12 @@ class WorldTextures {
     t.ground = await fs.Texture2D.fromImage(await _ground(level));
     t.wallRun = await fs.Texture2D.fromImage(await _wallRunTex());
     t.hazardStripe = await fs.Texture2D.fromImage(await _hazardTex());
+    t.asphaltNormal = fs.Texture2D.fromPixels(_asphaltNormal(), 512, 512,
+        content: fs.TextureContent.data, sampling: const fs.TextureSampling(maxAnisotropy: 4));
+    final sw = _sidewalkTex();
+    t.sidewalk = fs.Texture2D.fromPixels(sw.$1, 512, 512, sampling: const fs.TextureSampling(maxAnisotropy: 4));
+    t.sidewalkRough = fs.Texture2D.fromPixels(sw.$2, 512, 512,
+        content: fs.TextureContent.data, sampling: const fs.TextureSampling(maxAnisotropy: 4));
     t.wetAsphalt = await _wetRoughness();
     for (final ch in ['G', 'o', 'o', 'g', 'l', 'e']) {
       t.googleGlyphs.add(await fs.Texture2D.fromImage(await _glyph(ch)));
@@ -293,6 +302,106 @@ class WorldTextures {
       }
     }
     return fs.Texture2D.fromPixels(px, n, n, content: fs.TextureContent.data);
+  }
+
+  static double _lgh(double e, double t) {
+    final n = math.sin(e * 127.1 + t * 311.7) * 43758.5453123;
+    return n - n.floorToDouble();
+  }
+
+  /// Normal map half of the demo's `wg()` asphalt: tileable value-noise
+  /// FBM + per-pixel hash grain, central-difference normals (x1.45).
+  static Uint8List _asphaltNormal() {
+    const n = 512;
+    double lerp(double a, double b, double t) => a + (b - a) * t;
+    double c(double e, double t, int per) {
+      final r = e.floor(), i = t.floor();
+      final a = e - r, o = t - i;
+      final s = a * a * (3 - 2 * a), cc = o * o * (3 - 2 * o);
+      final l = ((r % per) + per) % per, u = (l + 1) % per;
+      final d = ((i % per) + per) % per, f = (d + 1) % per;
+      final p = _lgh(l * 17.0 + per * 3, d * 31.0 + 7), m = _lgh(u * 17.0 + per * 3, d * 31.0 + 7);
+      final h = _lgh(l * 17.0 + per * 3, f * 31.0 + 7), g = _lgh(u * 17.0 + per * 3, f * 31.0 + 7);
+      return lerp(lerp(p, m, s), lerp(h, g, s), cc);
+    }
+
+    final hgt = Float32List(n * n);
+    for (int e = 0; e < n; e++) {
+      for (int t = 0; t < n; t++) {
+        final r = t / n, i = e / n;
+        final o = c(r * 6, i * 6, 6), l = c(r * 12 + 3.1, i * 12 + 1.7, 12), u = c(r * 24 + 5.3, i * 24 + 4.9, 24);
+        final d = o * 0.5 + l * 0.32 + u * 0.18;
+        final f = _lgh(((t * 1.13).floor() & 511).toDouble(), ((e * 1.13).floor() & 511).toDouble()) - 0.5;
+        final p = _lgh(((t * 2 + 17) & 511).toDouble(), ((e * 2 + 31) & 511).toDouble()) - 0.5;
+        hgt[e * n + t] = (d - 0.5) * 0.1 + (f * 0.45 + p * 0.28) * 0.72;
+      }
+    }
+    final out = Uint8List(n * n * 4);
+    for (int e = 0; e < n; e++) {
+      final t0 = (e - 1 + n) & 511, n1 = (e + 1) & 511;
+      for (int r = 0; r < n; r++) {
+        final i0 = (r - 1 + n) & 511, a1 = (r + 1) & 511;
+        final cx = (hgt[e * n + a1] - hgt[e * n + i0]) * 1.45;
+        final ly = (hgt[n1 * n + r] - hgt[t0 * n + r]) * 1.45;
+        final u = math.sqrt(cx * cx + ly * ly + 1);
+        final k = (e * n + r) * 4;
+        out[k] = ((-cx / u * 0.5 + 0.5) * 255).round().clamp(0, 255);
+        out[k + 1] = ((-ly / u * 0.5 + 0.5) * 255).round().clamp(0, 255);
+        out[k + 2] = ((1 / u * 0.5 + 0.5) * 255).round().clamp(128, 255);
+        out[k + 3] = 255;
+      }
+    }
+    return out;
+  }
+
+  /// Port of the demo's `Eg()` granite paving: 8 x 8 slabs (60 px, 2 px
+  /// joints #0F141E) of rgb(28..42, +6, +15) on #1B2230, and the matching
+  /// roughness canvas (#767676 joints, 72..130 per slab). Returns (sRGB
+  /// colour pixels, metallic-roughness pixels with G = roughness, B = 1).
+  static (Uint8List, Uint8List) _sidewalkTex() {
+    const n = 512;
+    final col = Uint8List(n * n * 4), mr = Uint8List(n * n * 4);
+    for (int k = 0; k < n * n; k++) {
+      col[k * 4] = 0x1B;
+      col[k * 4 + 1] = 0x22;
+      col[k * 4 + 2] = 0x30;
+      col[k * 4 + 3] = 255;
+      mr[k * 4] = 255;
+      mr[k * 4 + 1] = 0x76;
+      mr[k * 4 + 2] = 255;
+      mr[k * 4 + 3] = 255;
+    }
+    for (int e = 0; e < 8; e++) {
+      for (int t = 0; t < 8; t++) {
+        final r = _lgh(t * 19.0 + 5, e * 23.0 + 11);
+        final a = (28 + r * 14).round();
+        final o = (72 + (1 - r) * 58).round();
+        for (int y = e * 64 + 2; y < e * 64 + 62; y++) {
+          for (int x = t * 64 + 2; x < t * 64 + 62; x++) {
+            final k = (y * n + x) * 4;
+            col[k] = a;
+            col[k + 1] = a + 6;
+            col[k + 2] = a + 15;
+            mr[k + 1] = o;
+          }
+        }
+      }
+    }
+    // 3 px joint lines every 64 px (stroked on the grid lines)
+    for (int g = 0; g <= n; g += 64) {
+      for (int d = -1; d <= 1; d++) {
+        final q = g + d;
+        if (q < 0 || q >= n) continue;
+        for (int z = 0; z < n; z++) {
+          for (final k in [(z * n + q) * 4, (q * n + z) * 4]) {
+            col[k] = 0x0F;
+            col[k + 1] = 0x14;
+            col[k + 2] = 0x1E;
+          }
+        }
+      }
+    }
+    return (col, mr);
   }
 
   /// Port of the demo's `Tg()` hazard stripe texture (256 x 128).
