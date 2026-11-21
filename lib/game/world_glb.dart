@@ -286,7 +286,8 @@ class GlbWorld {
 
     // Per-letter materials so each of the six letters ignites on its own.
     const order = ['G', 'o1', 'o2', 'g', 'l', 'e'];
-    const colors = ['#4285F4', '#EA4335', '#FBBC05', '#4285F4', '#34A853', '#EA4335'];
+    // igniteGoogleLetter colours (more saturated than the brand palette).
+    const colors = ['#1064FF', '#EE1F19', '#FFB300', '#1064FF', '#16A34A', '#EE1F19'];
     for (int i = 0; i < 6; i++) {
       for (final prefix in ['NeonLetter_', 'Core_']) {
         final n = t.getChildByName('$prefix${order[i]}');
@@ -295,13 +296,12 @@ class GlbWorld {
           for (final p in mn.mesh!.primitives) {
             final m = GlbLibrary.clonePbr(p.material);
             final core = prefix == 'Core_';
-            m.baseColorFactor = core ? hexColor('#1C273B') : hexColor(colors[i], 1, 0.34);
+            m.baseColorFactor = core ? hexColor('#1C273B') : hexColor(colors[i], 1, 0.32);
             if (!core) m.alphaMode = fs.AlphaMode.blend;
             m.emissiveStrength = 1;
-            final lit = hexColor(colors[i], core ? 5.0 : 2.4);
-            m.emissiveFactor = hexColor(colors[i], core ? 0.14 : 0.1);
+            m.emissiveFactor = hexColor(colors[i], core ? 0.14 : 0.08);
             p.material = m;
-            world.googleLetters.add(GlowProp(m, lit, litScale: 1.0, letterIndex: i));
+            world.googleLetters.add(GlowProp(m, hexColor(colors[i]), litScale: 1.0, letterIndex: i, core: core));
           }
         }
       }

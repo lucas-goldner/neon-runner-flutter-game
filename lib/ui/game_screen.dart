@@ -80,7 +80,9 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
       final h = _controller.sim;
       debugPrint('stopped: ffframes ${_state.phase.name} ${h.move.name} s=${h.s.toStringAsFixed(2)} '
           'lat=${h.lateral.toStringAsFixed(2)} y=${h.y.toStringAsFixed(2)} lane=${h.laneIndex} '
-          'v=${h.speed.toStringAsFixed(2)} flip=${h.flipStyle} ${h.flipPhase.toStringAsFixed(2)}');
+          'v=${h.speed.toStringAsFixed(2)} flip=${h.flipStyle} ${h.flipPhase.toStringAsFixed(2)} '
+          'kv=${h.voltage.toStringAsFixed(2)} combo=${_state.combo} boost=${h.boostBonus.toStringAsFixed(2)} '
+          'score=${_state.score} ${h.ledger.join(' ; ')}');
     }
     // `&stopat=<meters>`: run live, then hold the frame once the hero
     // reaches that route distance (debug captures of in-motion FX).
@@ -136,6 +138,13 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
               _controller.releaseLane(-1);
             case 'R':
               _controller.moveLane(1);
+              _controller.releaseLane(1);
+            case 'l': // hold A
+              _controller.moveLane(-1);
+            case 'r': // hold D
+              _controller.moveLane(1);
+            case 'U': // release both
+              _controller.releaseLane(-1);
               _controller.releaseLane(1);
             case 'J':
               _controller.jump();

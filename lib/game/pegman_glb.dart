@@ -67,7 +67,7 @@ class GlbPegman {
 
   /// The demo's PointLight(#FFE680, .3, 10.5, 2) at (0, .22, -.32).
   final fs.PointLight light = fs.PointLight(
-      color: vm.Vector3(1.0, 0.7913, 0.2232), intensity: 0.3, range: 10.5);
+      color: vm.Vector3(1.0, 0.7913, 0.2232), intensity: 0.3, range: 10.5, falloffExponent: 2);
   final fs.Node flipPivot = fs.Node(name: 'PegmanFlipPivot');
   final fs.Node flipOffset = fs.Node(name: 'PegmanFlipOffset');
   final Map<String, fs.Node> nodes = {};

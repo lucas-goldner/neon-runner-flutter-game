@@ -45,7 +45,10 @@ fs.UnlitMaterial unlit(vm.Vector4 color) => fs.UnlitMaterial()
 /// A neon prop whose glow can be ignited at runtime.
 class GlowProp {
   GlowProp(this.material, this.baseEmissive,
-      {this.litScale = 2.2, this.letterIndex = -1});
+      {this.litScale = 2.2, this.letterIndex = -1, this.core = false});
+
+  /// Google sign: true for a letter's core, false for its glass shell.
+  final bool core;
   final fs.PhysicallyBasedMaterial material;
   final vm.Vector4 baseEmissive;
   final double litScale;

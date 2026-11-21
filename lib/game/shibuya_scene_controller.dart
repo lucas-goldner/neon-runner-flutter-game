@@ -45,8 +45,10 @@ class ShibuyaSceneController {
   final List<fs.Node> _carShadows = [];
   final List<fs.Node> _underglows = [];
   late final NeonFx fx;
-  final fs.PointLight _beacon =
-      fs.PointLight(color: vm.Vector3(0.0545, 0.2346, 0.9047), intensity: 0.4, range: 68);
+  // three.js PointLight(#4285F4, .4, 68, decay 1.5).
+  final fs.PointLight _beacon = fs.PointLight(
+      color: vm.Vector3(0.0545, 0.2346, 0.9047), intensity: 0.4, range: 68, falloffExponent: 1.5);
+  final List<double> _letterFlash = List.filled(6, 0.0);
   double _hazardZap = 0;
   final FxFrame _fxf = FxFrame();
   PegmanPoseResult? _pose;
@@ -105,17 +107,12 @@ class ShibuyaSceneController {
     scene.add(world.root);
     state.setLoading(0.8, 'Preparing Pegman...');
     pegman = GlbPegman(glb)..attach(world.refRoot);
-    // googleBeaconLight: PointLight(#4285F4, .4, 68) 6 m in front of the
-    // sign's middle letter, 1.5 m up.
-    {
-      final gt = level.meta['googleTower'] as Map<String, dynamic>;
-      final sc = gt['signCenter'] as List<dynamic>;
-      final r = (gt['facingYaw'] as num).toDouble();
-      world.refRoot.add(fs.Node(name: 'GoogleBeaconLight')
-        ..position = vm.Vector3((sc[0] as num).toDouble() + math.sin(r) * 6,
-            (sc[1] as num).toDouble() + 1.5, (sc[2] as num).toDouble() + math.cos(r) * 6)
-        ..addComponent(fs.PointLightComponent(_beacon)));
-    }
+    // googleBeaconLight: 6 m in front of the GLB sign's middle letter,
+    // 1.5 m up — (245.5, 30, 256.4) as measured in the demo's scene (the
+    // level meta signCenter predates the GLB tower).
+    world.refRoot.add(fs.Node(name: 'GoogleBeaconLight')
+      ..position = vm.Vector3(245.5, 30.0, 256.4)
+      ..addComponent(fs.PointLightComponent(_beacon)));
     state.setLoading(0.86, 'Loading Tokyo street fleet...');
     _buildTraffic();
     _buildTrains();
@@ -387,8 +384,8 @@ class ShibuyaSceneController {
     for (final a in world.archRigs) {
       a.reset();
     }
-    for (final l in world.googleLetters) {
-      l.material.emissiveFactor = l.baseEmissive * 0.04;
+    for (int i = 0; i < 6; i++) {
+      _letterFlash[i] = 0;
     }
   }
 
@@ -527,12 +524,23 @@ class ShibuyaSceneController {
       world.archRigs[i].sync(state.photoMode ? 0 : 1 / 60, _time, sim.s,
           state.phase == AppPhase.finale, i < sim.portalDone.length && sim.portalDone[i], _mapsMorph, cars);
     }
+    // igniteGoogleLetter / flash decay (3.2/s): core 3.3 -> 2.15, shell
+    // .72 -> .46; dormant core #1C273B x.14, shell x.08 @ .32 opacity.
+    for (int i = 0; i < 6; i++) {
+      if (_letterFlash[i] > 0) _letterFlash[i] = math.max(0, _letterFlash[i] - (1 / 60) * 3.2);
+    }
     for (final l in world.googleLetters) {
       final i = l.letterIndex;
-      if (i >= 0 && state.googleLettersLit[i]) {
-        final k = 0.85 + 0.15 * math.sin(_time * 5 + i);
-        l.material.emissiveFactor = vm.Vector4(
-            l.baseEmissive.x * k, l.baseEmissive.y * k, l.baseEmissive.z * k, 1);
+      if (i < 0) continue;
+      final c = l.baseEmissive;
+      final lit = state.googleLettersLit[i];
+      final f = _letterFlash[i];
+      final k = !lit ? (l.core ? 0.14 : 0.08) : (l.core ? _lerp(2.15, 3.3, f) : _lerp(0.46, 0.72, f));
+      l.material.emissiveFactor = vm.Vector4(c.x * k, c.y * k, c.z * k, 1);
+      if (l.core) {
+        l.material.baseColorFactor = lit ? vm.Vector4(c.x, c.y, c.z, 1) : hexColor('#1C273B');
+      } else {
+        l.material.baseColorFactor = vm.Vector4(c.x, c.y, c.z, lit ? 0.34 : 0.32);
       }
     }
     world.glbWorld.updateSigns(sim.s, 1 / 60, _time,
@@ -660,11 +668,9 @@ class ShibuyaSceneController {
           fx.mapsExtrudeWave(e.x, e.z);
         case 'routeComplete':
           fx.finaleShock(sim.rooftop.x, sim.rooftop.z);
-          _beacon
-            ..color = vm.Vector3(0.0545, 0.2346, 0.9047)
-            ..intensity = 8;
         case 'googleLetter':
-          const lc = ['#4285F4', '#EA4335', '#FBBC05', '#4285F4', '#34A853', '#EA4335'];
+          if (e.index >= 0 && e.index < 6) _letterFlash[e.index] = 1;
+          const lc = ['#1064FF', '#EE1F19', '#FFB300', '#1064FF', '#16A34A', '#EE1F19'];
           final c = hexColor(lc[e.index.clamp(0, 5)]);
           _beacon
             ..color = vm.Vector3(c.x, c.y, c.z)
