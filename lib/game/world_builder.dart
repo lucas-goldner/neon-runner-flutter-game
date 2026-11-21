@@ -171,7 +171,10 @@ class ShibuyaWorld {
         // roughness x0.8 calibrates flutter_scene's GGX lobe to the demo's
         // moonlit wet-asphalt sheen (three.js MeshStandardMaterial).
         pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 0.8, metallic: 1.0)
-          ..metallicRoughnessTexture = tex.wetAsphalt,
+          ..metallicRoughnessTexture = tex.wetAsphalt
+          // three.js envMapIntensity .24 has no per-material twin here; specular
+          // .5 matches the demo's ground reflections best (A/B'd at 320/680 m).
+          ..specular = 0.5,
         'ShibuyaMirrorWetAsphalt');
 
     // DarkModeGoogleMapsGround overlay; fades out during the sky drop.
@@ -709,7 +712,8 @@ class ShibuyaWorld {
     refRoot.add(fs.Node(
         name: 'SecondaryOsmRoads',
         mesh: fs.Mesh(buf.build(),
-            pbr(hexColor('#162236'), emissive: hexColor('#0A1221', 0.22), roughness: 0.48, metallic: 0.06))));
+            pbr(hexColor('#162236'), emissive: hexColor('#0A1221', 0.22), roughness: 0.48, metallic: 0.06)
+              ..specular = 0.5)));
   }
 
   // ------------------------------------------- ShibuyaRiverWater (demo)
