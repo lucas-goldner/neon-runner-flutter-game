@@ -20,6 +20,7 @@ class WorldTextures {
   late final fs.Texture2D shopGlow;
   late final fs.Texture2D ground;
   late final fs.Texture2D wallRun;
+  late final fs.Texture2D hazardStripe;
   late final fs.Texture2D wetAsphalt;
   final List<fs.Texture2D> googleGlyphs = [];
 
@@ -39,6 +40,7 @@ class WorldTextures {
     t.shopGlow = await fs.Texture2D.fromImage(sh.$2);
     t.ground = await fs.Texture2D.fromImage(await _ground(level));
     t.wallRun = await fs.Texture2D.fromImage(await _wallRunTex());
+    t.hazardStripe = await fs.Texture2D.fromImage(await _hazardTex());
     t.wetAsphalt = await _wetRoughness();
     for (final ch in ['G', 'o', 'o', 'g', 'l', 'e']) {
       t.googleGlyphs.add(await fs.Texture2D.fromImage(await _glyph(ch)));
@@ -291,6 +293,33 @@ class WorldTextures {
       }
     }
     return fs.Texture2D.fromPixels(px, n, n, content: fs.TextureContent.data);
+  }
+
+  /// Port of the demo's `Tg()` hazard stripe texture (256 x 128).
+  static Future<ui.Image> _hazardTex() async {
+    final rec = ui.PictureRecorder();
+    final c = Canvas(rec);
+    c.drawRect(const Rect.fromLTWH(0, 0, 256, 128), Paint()..color = const Color(0xFF161E2E));
+    c.save();
+    c.clipRect(const Rect.fromLTWH(0, 22, 256, 84));
+    c.drawRect(const Rect.fromLTWH(0, 22, 256, 84), Paint()..color = const Color(0xFF111722));
+    final amber = Paint()..color = const Color(0xFFF59E0B);
+    for (double e = -128; e < 384; e += 48) {
+      c.drawPath(
+          Path()
+            ..moveTo(e, 128)
+            ..lineTo(e + 24, 128)
+            ..lineTo(e + 24 + 92.16, 0)
+            ..lineTo(e + 92.16, 0)
+            ..close(),
+          amber);
+    }
+    c.restore();
+    final band = Paint()..color = const Color(0xFF2A364D);
+    c.drawRect(const Rect.fromLTWH(0, 18, 256, 5), band);
+    c.drawRect(const Rect.fromLTWH(0, 105, 256, 5), band);
+    c.drawRect(const Rect.fromLTWH(0, 23, 256, 2), Paint()..color = const Color.fromRGBO(255, 255, 255, 0.22));
+    return rec.endRecording().toImage(256, 128);
   }
 
   /// Port of the demo's `Lg()` wall-run panel texture (chevrons).

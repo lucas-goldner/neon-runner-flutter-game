@@ -154,8 +154,12 @@ class FacadeTex {
       mr[k + 2] = 255;
       mr[k + 3] = 255;
     }
-    return FacadeTex(await fs.Texture2D.fromImage(mi), await fs.Texture2D.fromImage(ei),
-        fs.Texture2D.fromPixels(mr, i.toInt(), a.toInt(), content: fs.TextureContent.data));
+    // three.js: texture.anisotropy = 4 (flutter_scene defaults to 8, which
+    // keeps distant windows sharper and noisier than the demo).
+    const smp = fs.TextureSampling(maxAnisotropy: 4);
+    return FacadeTex(await fs.Texture2D.fromImage(mi, sampling: smp),
+        await fs.Texture2D.fromImage(ei, sampling: smp),
+        fs.Texture2D.fromPixels(mr, i.toInt(), a.toInt(), content: fs.TextureContent.data, sampling: smp));
   }
 }
 

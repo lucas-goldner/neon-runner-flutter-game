@@ -637,10 +637,46 @@ class ShibuyaWorld {
     }
 
     final buf = MeshBuf();
+    final marks = MeshBuf();
+    final up = vm.Vector3(0, 1, 0);
+    // Flat w x l rectangle centred at (x, z), long axis along (l, u).
+    void rect(MeshBuf m, double x, double z, double l, double u, double w, double len, double y) {
+      final hw = w / 2, hl = len / 2;
+      vm.Vector3 p(double a, double b) => vm.Vector3(x + u * a + l * b, y, z - l * a + u * b);
+      m.quad(p(-hw, -hl), p(hw, -hl), p(hw, hl), p(-hw, hl), up);
+    }
+
     for (final w in ways) {
+      // Only the demo's SecondaryOsmRoads list (`Pf`) carries lane data.
+      if (w['lanes'] == null) continue;
       final pts = w['points'] as List<dynamic>?;
       if (pts == null || pts.length < 2) continue;
       final width = ((w['width'] as num?)?.toDouble() ?? 9).clamp(5.2, 15.5);
+      // Centre dashes + Scramble stop bar (`_buildScrambleCrosswalks`).
+      final radiates = w['radiatesFromScramble'] == true;
+      if (radiates || ((w['lanes'] as num?) ?? 0) >= 2 || ((w['width'] as num?) ?? 0) >= 9) {
+        for (int e = 0; e + 1 < pts.length; e++) {
+          final i0 = pts[e] as List<dynamic>, a0 = pts[e + 1] as List<dynamic>;
+          final ix = (i0[0] as num).toDouble(), iz = (i0[1] as num).toDouble();
+          final ox = (a0[0] as num).toDouble() - ix, oz = (a0[1] as num).toDouble() - iz;
+          final c = math.sqrt(ox * ox + oz * oz);
+          if (c < 4.5) continue;
+          final l = ox / c, u = oz / c;
+          for (double t = 3; t < c - 3; t += 11.5) {
+            final nx = ix + l * t, nz = iz + u * t;
+            if (inScramblePlaza(nx, nz) || (nx > 218 && nx < 268 && nz > 186 && nz < 265) || routeDist(nx, nz) < 11.5) {
+              continue;
+            }
+            rect(marks, nx, nz, l, u, 0.22, 3.4, 0.021);
+          }
+          if (radiates && e == 0 && c >= 10) {
+            final sx = ix + l * 4, sz = iz + u * 4;
+            if (!inScramblePlaza(sx, sz) && routeDist(sx, sz) >= 12.5) {
+              rect(marks, sx, sz, l, u, (width * 0.78).clamp(5.0, 10.0), 0.42, 0.021);
+            }
+          }
+        }
+      }
       for (int e = 0; e + 1 < pts.length; e++) {
         final n = pts[e] as List<dynamic>, r = pts[e + 1] as List<dynamic>;
         final nx = (n[0] as num).toDouble(), nz = (n[1] as num).toDouble();
@@ -663,11 +699,17 @@ class ShibuyaWorld {
         }
       }
     }
+    if (!marks.isEmpty) {
+      refRoot.add(fs.Node(
+          name: 'SecondaryRoadMarkings',
+          mesh: fs.Mesh(marks.build(),
+              pbr(hexColor('#DCE4EE'), emissive: hexColor('#1A2438', 0.12), roughness: 0.34, metallic: 0.04))));
+    }
     if (buf.isEmpty) return;
     refRoot.add(fs.Node(
         name: 'SecondaryOsmRoads',
         mesh: fs.Mesh(buf.build(),
-            pbr(hexColor('#16222E'), emissive: hexColor('#0A1221', 0.22), roughness: 0.48, metallic: 0.06))));
+            pbr(hexColor('#162236'), emissive: hexColor('#0A1221', 0.22), roughness: 0.48, metallic: 0.06))));
   }
 
   // ------------------------------------------- ShibuyaRiverWater (demo)
@@ -737,27 +779,83 @@ class ShibuyaWorld {
 
   // ---------------------------------------------------------- barriers
   void _barriers() {
-    final body = MeshBuf();
-    final stripe = MeshBuf();
+    // _buildRouteHazards: Jersey-barrier profile (#202B3D), yellow-black
+    // hazard stripe panels on both slopes (Tg texture, emissive #F59E0B
+    // x.52), orange warning beacon cap (#FF5A1A, emissive x2.2), feet.
+    final frame = MeshBuf(), stripes = MeshBuf(), beacons = MeshBuf();
     for (final b in level.route['streetBarriers'] as List<dynamic>) {
-      final pos = b['pos'] as List<dynamic>;
-      final x = (pos[0] as num).toDouble(), z = (pos[2] as num).toDouble();
-      final gy = (b['groundY'] as num?)?.toDouble() ?? 0;
-      final wdt = (b['width'] as num?)?.toDouble() ?? 2.8;
-      final hgt = (b['height'] as num?)?.toDouble() ?? 1.15;
-      final dep = (b['depth'] as num?)?.toDouble() ?? 0.9;
-      final yaw = mirrorYaw((b['yaw'] as num).toDouble());
-      body.box(w3(x, gy + hgt / 2, z), vm.Vector3(wdt, hgt, dep), yaw);
-      for (int i = 0; i < 2; i++) {
-        stripe.box(w3(x, gy + hgt * (0.35 + i * 0.4), z),
-            vm.Vector3(wdt + 0.02, hgt * 0.14, dep + 0.02), yaw);
+      final pos = b['pos'] as List<dynamic>?;
+      if (pos == null) continue;
+      double d0(dynamic v, double f) => (v as num?)?.toDouble() ?? f;
+      final o = d0(pos[0], 0), c = d0(pos[2], 0);
+      final l = b['groundY'] != null ? d0(b['groundY'], 0) : d0(pos[1], 0);
+      final u = d0(b['yaw'], 0);
+      final d = d0(b['width'], 2.8), f = d0(b['height'], 1.15), p = d0(b['depth'], 0.9);
+      final m = p * 0.48, h = p * 0.34, g = p * 0.19, top = f - 0.14;
+      final cu = math.cos(u), su = math.sin(u);
+      // barrier-local (X along width, Y up, Z across depth) -> reference
+      vm.Vector3 w(double x, double y, double z) => vm.Vector3(o + x * cu + z * su, l + y, c - x * su + z * cu);
+      vm.Vector3 dirW(double x, double y, double z) => vm.Vector3(x * cu + z * su, y, -x * su + z * cu);
+      // profile (depth z, height y); the extrusion runs along X
+      final prof = [
+        (m, 0.0), (m, 0.16), (h, 0.36), (g, top), (-g, top), (-h, 0.36), (-m, 0.16), (-m, 0.0)
+      ];
+      final ex = math.max(0.8, d - 0.18) / 2;
+      for (int k = 0; k < prof.length; k++) {
+        final a = prof[k], bq = prof[(k + 1) % prof.length];
+        final nz = bq.$2 - a.$2, ny = -(bq.$1 - a.$1);
+        final nl = math.sqrt(nz * nz + ny * ny);
+        if (nl < 1e-6) continue;
+        frame.quad(w(-ex, a.$2, a.$1), w(ex, a.$2, a.$1), w(ex, bq.$2, bq.$1), w(-ex, bq.$2, bq.$1),
+            dirW(0, ny / nl, nz / nl));
       }
+      for (final sx in [-ex, ex]) {
+        final n = dirW(sx.sign, 0, 0);
+        final cIdx = frame.vertex(w(sx, top * 0.5, 0), n, 0.5, 0.5);
+        final ring = [for (final q in prof) frame.vertex(w(sx, q.$2, q.$1), n, 0, 0)];
+        for (int k = 0; k < ring.length; k++) {
+          final i0 = ring[k], i1 = ring[(k + 1) % ring.length];
+          if (sx > 0) {
+            frame.tri(cIdx, i0, i1);
+          } else {
+            frame.tri(cIdx, i1, i0);
+          }
+        }
+      }
+      for (final e in [-1.0, 1.0]) {
+        frame.box(w(d * 0.45 * e, 0.09, 0), vm.Vector3(0.2, 0.18, p * 1.04), u);
+      }
+      // hazard stripe panels on both slopes
+      final sw = d * 0.88, sh = 0.36;
+      final sY = 0.36 + (top - 0.36) * 0.44, sZ = h + (g - h) * 0.44 + 0.068;
+      final ang = math.atan2(h - g, math.max(0.2, top - 0.36));
+      for (final e in [1.0, -1.0]) {
+        // plane up axis tilts toward the centre: (0, cos a, -sin a) on +Z
+        final upY = math.cos(ang), upZ = -math.sin(ang) * e;
+        final nY = math.sin(ang), nZ = math.cos(ang) * e;
+        vm.Vector3 q(double x, double y) => w(x * e, sY + y * upY, sZ * e + y * upZ);
+        stripes.quad(q(-sw / 2, -sh / 2), q(sw / 2, -sh / 2), q(sw / 2, sh / 2), q(-sw / 2, sh / 2),
+            dirW(0, nY, nZ), u0: 0, u1: 2.2, v0: 1, v1: 0);
+      }
+      beacons.box(w(0, f - 0.08, 0), vm.Vector3(d * 0.94, 0.14, g * 1.85), u);
     }
-    _add(body, pbr(hexColor('#E2E8F0', 0.7), emissive: hexColor('#94A3B8', 0.25), roughness: 0.5),
-        'barrier_body');
-    _add(stripe, pbr(hexColor('#FF4F00', 0.6), emissive: hexColor('#FF4F00', 2.6)),
-        'barrier_stripes');
+    void add(MeshBuf b, fs.Material mat, String name) {
+      if (!b.isEmpty) refRoot.add(fs.Node(name: name, mesh: fs.Mesh(b.build(), mat)));
+    }
+
+    add(frame, pbr(hexColor('#202B3D'), roughness: 0.56, metallic: 0.38), 'StreetBarrierFrames');
+    add(
+        stripes,
+        fs.PhysicallyBasedMaterial(baseColorTexture: tex.hazardStripe, emissiveTexture: tex.hazardStripe)
+          ..emissiveFactor = hexColor('#F59E0B', 0.52)
+          ..roughnessFactor = 0.34
+          ..metallicFactor = 0.18
+          ..doubleSided = true,
+        'StreetBarrierHazardStripes');
+    add(beacons, pbr(hexColor('#FF5A1A'), emissive: hexColor('#FF4F00', 2.2), roughness: 0.24),
+        'StreetBarrierWarningBeacons');
   }
+
 
 
 
