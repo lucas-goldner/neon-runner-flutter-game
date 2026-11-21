@@ -171,9 +171,8 @@ class ShibuyaWorld {
         u0: 0, v0: 0, u1: 1180 / 72, v1: 1180 / 72);
     _add(
         asphalt,
-        // roughness x0.8 calibrates flutter_scene's GGX lobe to the demo's
-        // moonlit wet-asphalt sheen (three.js MeshStandardMaterial).
-        pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 0.8, metallic: 1.0)
+        // roughness 1 x puddle map (A/B'd against the demo at 320/410).
+        pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 1.0, metallic: 1.0)
           ..metallicRoughnessTexture = tex.wetAsphalt
           // wg() normal map, repeat 280 over 1180 m (one tile / 4.2 m), scale .1
           ..normalTexture = tex.asphaltNormal
@@ -328,9 +327,21 @@ class ShibuyaWorld {
           final ax = gx + px * lat, az = gz + pz * lat;
           const k = 0.96;
           flat(ax - d * 0.55 * k, az - f * 0.55 * k, 0.32 * k, 2.55 * k, yaw, 0.024);
-          // arrow head (approximated by a short wide bar + tip)
-          flat(ax + d * 1.0 * k, az + f * 1.0 * k, 1.1 * k, 0.5 * k, yaw, 0.024);
-          flat(ax + d * 1.45 * k, az + f * 1.45 * k, 0.55 * k, 0.45 * k, yaw, 0.024);
+          // arrow head: ShapeGeometry triangle (-.74,.45) (0,1.95) (.74,.45)
+          vm.Vector3 hp(double lat, double fwd) =>
+              w3(ax + px * lat * k + d * fwd * k, 0.024, az + pz * lat * k + f * fwd * k);
+          final up = vm.Vector3(0, 1, 0);
+          final q0 = hp(-0.74, 0.45), q1 = hp(0, 1.95), q2 = hp(0.74, 0.45);
+          final h0 = paint.vertex(q0, up, 0, 0);
+          final h1 = paint.vertex(q1, up, 0.5, 1);
+          final h2 = paint.vertex(q2, up, 1, 0);
+          // single winding facing +Y (a doubled back face would z-fight
+          // with a flipped normal and read dark)
+          if ((q1 - q0).cross(q2 - q0).y >= 0) {
+            paint.tri(h0, h1, h2);
+          } else {
+            paint.tri(h0, h2, h1);
+          }
         }
       }
       if (sb >= 95) {

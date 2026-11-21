@@ -81,6 +81,9 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
       debugPrint('stopped: ffframes ${_state.phase.name} ${h.move.name} s=${h.s.toStringAsFixed(2)} '
           'lat=${h.lateral.toStringAsFixed(2)} y=${h.y.toStringAsFixed(2)} lane=${h.laneIndex} '
           'v=${h.speed.toStringAsFixed(2)} flip=${h.flipStyle} ${h.flipPhase.toStringAsFixed(2)} '
+          'hero=(${h.x.toStringAsFixed(2)},${h.y.toStringAsFixed(2)},${h.z.toStringAsFixed(2)}) '
+          'cam=(${_controller.camPos.x.toStringAsFixed(2)},${_controller.camPos.y.toStringAsFixed(2)},${_controller.camPos.z.toStringAsFixed(2)}) '
+          'tgt=(${_controller.camTarget.x.toStringAsFixed(2)},${_controller.camTarget.y.toStringAsFixed(2)},${_controller.camTarget.z.toStringAsFixed(2)}) fov=${_controller.camFov.toStringAsFixed(1)} '
           'kv=${h.voltage.toStringAsFixed(2)} combo=${_state.combo} boost=${h.boostBonus.toStringAsFixed(2)} '
           'score=${_state.score} ${h.ledger.join(' ; ')}');
     }

@@ -45,6 +45,7 @@ class ShibuyaSceneController {
   final List<fs.Node> _carShadows = [];
   final List<fs.Node> _underglows = [];
   late final NeonFx fx;
+  fs.Node? _skyDome;
   // three.js PointLight(#4285F4, .4, 68, decay 1.5).
   final fs.PointLight _beacon = fs.PointLight(
       color: vm.Vector3(0.0545, 0.2346, 0.9047), intensity: 0.4, range: 68, falloffExponent: 1.5);
@@ -106,6 +107,8 @@ class ShibuyaSceneController {
     await world.glbWorld.media?.update(0, 1.8, force: true);
     scene.add(world.root);
     state.setLoading(0.8, 'Preparing Pegman...');
+    _skyDome = NeonEnvironment.buildSkyDome();
+    world.refRoot.add(_skyDome!);
     pegman = GlbPegman(glb)..attach(world.refRoot);
     // googleBeaconLight: 6 m in front of the GLB sign's middle letter,
     // 1.5 m up — (245.5, 30, 256.4) as measured in the demo's scene (the
@@ -166,7 +169,10 @@ class ShibuyaSceneController {
       ..color = vm.Vector3(0.095, 0.17, 0.31)
       ..density = 3.2e-4
       ..start = 12
-      ..maxOpacity = 0.62;
+      ..maxOpacity = 0.62
+      // the sky dome (1100 m, camera-centred) is drawn unfogged like the
+      // demo's ShaderMaterial dome; all real geometry is nearer than this.
+      ..cutoffDistance = 1050;
     // The demo's bloom is a 3 px, 13-tap soft-knee blur (strength 0.18):
     // practically no halo, so the engine's wide bloom stays off.
     scene.postProcess.bloom.enabled = false;
@@ -465,6 +471,7 @@ class ShibuyaSceneController {
     _syncTrains(dt);
     _syncHero(dt);
     _computeCamera(dt);
+    _skyDome?.position = vm.Vector3(camPos.x, camPos.y, camPos.z);
     _syncFx(state.photoMode ? 0 : dt);
     state.tick(state.photoMode ? 0 : dt);
   }

@@ -154,4 +154,105 @@ class NeonEnvironment {
     }
     return co;
   }
+
+  // ------------------------------------------------ ShibuyaNightSkyDome
+  static double _fract(double v) => v - v.floorToDouble();
+  static double _hash21(double x, double y) {
+    x = _fract(x * 123.34);
+    y = _fract(y * 456.21);
+    final d = x * (x + 45.32) + y * (y + 45.32);
+    x += d;
+    y += d;
+    return _fract(x * y);
+  }
+
+  static double _vnoise(double x, double y) {
+    final ix = x.floorToDouble(), iy = y.floorToDouble();
+    var fx = x - ix, fy = y - iy;
+    fx = fx * fx * (3 - 2 * fx);
+    fy = fy * fy * (3 - 2 * fy);
+    final a = _hash21(ix, iy), b = _hash21(ix + 1, iy), c = _hash21(ix, iy + 1), d = _hash21(ix + 1, iy + 1);
+    return _mix(_mix(a, b, fx), _mix(c, d, fx), fy);
+  }
+
+  /// The demo's sky-dome fragment shader (reference-frame direction).
+  static void _sky(double dx, double dy, double dz, List<double> out) {
+    final h = dy.clamp(0.0, 1.0);
+    const zen = [0.0085, 0.0220, 0.0680], mid = [0.0240, 0.0620, 0.1760], hor = [0.0520, 0.1220, 0.2960];
+    final cuX = dx / (dy + 0.26) * 1.4, cuY = dz / (dy + 0.26) * 1.4;
+    final cloud = dy > -0.25 ? _vnoise(cuX * 2.1, cuY * 2.1) * 0.65 + _vnoise(cuX * 4.6, cuY * 4.6) * 0.35 : 0.0;
+    final band = _ss(0.03, 0.34, h) * (1 - _ss(0.45, 0.88, h));
+    final cl = _ss(0.40, 0.76, cloud) * band;
+    final az = math.atan2(dz, dx);
+    final glow = math.exp(-h * 7.2);
+    final warm = 0.5 + 0.5 * math.sin(az * 2.0 + 0.6);
+    final cool = 0.5 + 0.5 * math.cos(az * 3.0 - 1.1);
+    const cc = [0.014, 0.028, 0.062], wc = [0.048, 0.016, 0.008], kc = [0.018, 0.045, 0.105];
+    for (int k = 0; k < 3; k++) {
+      var c = _mix(hor[k], mid[k], _ss(0.0, 0.26, h));
+      c = _mix(c, zen[k], _ss(0.20, 0.78, h));
+      c += cc[k] * cl;
+      c += wc[k] * glow * (0.24 + 0.24 * warm);
+      c += kc[k] * glow * (0.32 + 0.24 * cool);
+      out[k] = c;
+    }
+  }
+
+  /// A camera-centred unlit sky sphere (radius [radius], viewed from inside)
+  /// carrying the demo's `ShibuyaNightSkyDome` shader baked to an equirect.
+  /// Lives in the reference frame (add under `refRoot`).
+  static fs.Node buildSkyDome({double radius = 1100, int w = 1024, int h = 512}) {
+    final px = Uint8List(w * h * 4);
+    final c = [0.0, 0.0, 0.0];
+    int enc(double v) {
+      v = v.clamp(0.0, 1.0);
+      final sv = v <= 0.0031308 ? v * 12.92 : 1.055 * math.pow(v, 1 / 2.4) - 0.055;
+      return (sv * 255).round().clamp(0, 255);
+    }
+
+    for (int j = 0; j < h; j++) {
+      final lat = (0.5 - (j + 0.5) / h) * math.pi;
+      for (int i = 0; i < w; i++) {
+        final lon = ((i + 0.5) / w) * 2 * math.pi;
+        final dx = math.cos(lat) * math.cos(lon), dy = math.sin(lat), dz = math.cos(lat) * math.sin(lon);
+        _sky(dx, dy, dz, c);
+        final o = (j * w + i) * 4;
+        px[o] = enc(c[0]);
+        px[o + 1] = enc(c[1]);
+        px[o + 2] = enc(c[2]);
+        px[o + 3] = 255;
+      }
+    }
+    final tex = fs.Texture2D.fromPixels(px, w, h);
+    // UV sphere matching the equirect parameterisation above.
+    const seg = 64, rings = 32;
+    final pos = <double>[], uv = <double>[], nrm = <double>[];
+    final idx = <int>[];
+    for (int r = 0; r <= rings; r++) {
+      final v = r / rings;
+      final lat = (0.5 - v) * math.pi;
+      for (int sgi = 0; sgi <= seg; sgi++) {
+        final u = sgi / seg;
+        final lon = u * 2 * math.pi;
+        final x = math.cos(lat) * math.cos(lon), y = math.sin(lat), z = math.cos(lat) * math.sin(lon);
+        pos.addAll([x * radius, y * radius, z * radius]);
+        nrm.addAll([-x, -y, -z]);
+        uv.addAll([u, v]);
+      }
+    }
+    for (int r = 0; r < rings; r++) {
+      for (int sgi = 0; sgi < seg; sgi++) {
+        final a = r * (seg + 1) + sgi, b = a + seg + 1;
+        idx.addAll([a, b, a + 1, a + 1, b, b + 1, a, a + 1, b, a + 1, b + 1, b]);
+      }
+    }
+    final geo = fs.MeshGeometry.fromArrays(
+      positions: Float32List.fromList(pos),
+      normals: Float32List.fromList(nrm),
+      texCoords: Float32List.fromList(uv),
+      indices: idx,
+    );
+    final m = fs.UnlitMaterial(colorTexture: tex)..doubleSided = true;
+    return fs.Node(name: 'ShibuyaNightSkyDome', mesh: fs.Mesh(geo, m));
+  }
 }
