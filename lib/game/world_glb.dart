@@ -263,13 +263,8 @@ class GlbWorld {
     }
   }
 
-  bool _inScramblePlaza(double x, double z) {
-    final sc = level.meta['scrambleCrossing'] as Map<String, dynamic>;
-    final c = sc['center'] as List<dynamic>;
-    final r = _d(sc['radius'], 32);
-    final dx = x - _d(c[0]), dz = z - _d(c[2]);
-    return dx * dx + dz * dz < r * r;
-  }
+  bool _inScramblePlaza(double x, double z) => world.inScramblePlaza(x, z);
+
 
   // ------------------------------------------------ Google Stream tower
   void _googleTower() {

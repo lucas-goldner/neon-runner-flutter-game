@@ -154,13 +154,9 @@ class ShibuyaWorld {
   late final fs.Node mapsOverlay;
   final List<fs.Node> dropPin = [];
 
-  bool inScramblePlaza(double x, double z) {
-    final sc = level.meta['scrambleCrossing'] as Map<String, dynamic>;
-    final c = sc['center'] as List<dynamic>;
-    final r = (sc['radius'] as num).toDouble();
-    final dx = x - (c[0] as num).toDouble(), dz = z - (c[2] as num).toDouble();
-    return dx * dx + dz * dz < r * r;
-  }
+  /// `_isInsideScramblePlaza`: the demo's axis-aligned plaza box.
+  bool inScramblePlaza(double x, double z) => x >= -24 && x <= 38 && z >= -24 && z <= 24;
+
 
   void _ground() {
     final up = vm.Vector3(0, 1, 0);
