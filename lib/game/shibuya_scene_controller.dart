@@ -10,6 +10,7 @@ import 'hero_sim.dart';
 import 'level_data.dart';
 import 'neon_environment.dart';
 import 'glb_library.dart';
+import 'ground_bounce.dart';
 import 'pegman_builder.dart';
 import 'pegman_glb.dart';
 import 'pegman_pose.dart';
@@ -51,6 +52,8 @@ class ShibuyaSceneController {
       color: vm.Vector3(0.0545, 0.2346, 0.9047), intensity: 0.4, range: 68, falloffExponent: 1.5);
   final List<double> _letterFlash = List.filled(6, 0.0);
   double _hazardZap = 0;
+  GroundBounce? _bounce;
+  double _towerPower = 0;
   final FxFrame _fxf = FxFrame();
   PegmanPoseResult? _pose;
   double _mapsMorph = 0;
@@ -234,6 +237,7 @@ class ShibuyaSceneController {
       world.refRoot.add(g);
       _underglows.add(g);
     }
+    _bounce = GroundBounce(world.refRoot);
   }
 
   /// `_buildParkedCarMeetSlots`: up to 10 tuner cars parked 8.4 m off the
@@ -377,6 +381,8 @@ class ShibuyaSceneController {
     _beacon
       ..color = vm.Vector3(0.0545, 0.2346, 0.9047)
       ..intensity = 0.4;
+    _bounce?.reset();
+    _towerPower = 0;
     _firstPill = true;
     _camInit = false;
     _poPreset = null;
@@ -472,6 +478,7 @@ class ShibuyaSceneController {
     _syncHero(dt);
     _computeCamera(dt);
     _skyDome?.position = vm.Vector3(camPos.x, camPos.y, camPos.z);
+    _syncBounce();
     _syncFx(state.photoMode ? 0 : dt);
     state.tick(state.photoMode ? 0 : dt);
   }
@@ -550,9 +557,14 @@ class ShibuyaSceneController {
         l.material.baseColorFactor = vm.Vector4(c.x, c.y, c.z, lit ? 0.34 : 0.32);
       }
     }
-    world.glbWorld.updateSigns(sim.s, 1 / 60, _time,
+    final lit = world.glbWorld.updateSigns(sim.s, 1 / 60, _time,
         finale: state.phase == AppPhase.finale,
         reset: state.phase == AppPhase.skyDrop || state.phase == AppPhase.mapsTitle);
+    if (_mapsMorph > 0.35) {
+      for (final sg in lit) {
+        _bounce?.push(sg.pos.x, sg.pos.z, sg.neon);
+      }
+    }
     for (int i = 0; i < sim.taxis.length; i++) {
       final t = sim.taxis[i];
       final n = _taxiNodes[i];
@@ -665,6 +677,33 @@ class ShibuyaSceneController {
   /// Drains [HeroSim.events] like the demo's engine callbacks
   /// (`onBoostRing` -> `igniteBoostRing`, `onNearMissTaxi` ->
   /// `triggerNearMissArc`, ...).
+  /// Ground uniforms: uHeroPos (hero + .9), uHeroPower, uHeroColor,
+  /// uTowerPower, uFinalePower -> the wet-asphalt bounce decals.
+  void _syncBounce() {
+    final b = _bounce;
+    if (b == null) return;
+    final oc = state.overchargeRatio;
+    vm.Vector4 col;
+    if (_hazardZap > 0) {
+      col = hexColor('#A855F7');
+    } else if (oc > 0.35) {
+      final a = hexColor('#FF5A1A'), c = hexColor('#38BDF8');
+      col = a + (c - a) * (oc * 0.45);
+    } else {
+      col = hexColor('#FF7A1A');
+    }
+    b.sync(
+      visible: _mapsMorph > 0.03,
+      cam: camPos,
+      hero: vm.Vector3(sim.x, sim.y + 0.9, sim.z),
+      heroColor: col,
+      heroPower: 1.2 + sim.speed / 15 * 2.2 + oc * 1.4,
+      towerPower: _towerPower,
+      finalePower: state.phase == AppPhase.finale ? 1 : 0,
+      time: _time,
+    );
+  }
+
   void _handleEvents() {
     final hero = vm.Vector3(sim.x, sim.y, sim.z);
     for (final e in sim.events) {
@@ -675,6 +714,7 @@ class ShibuyaSceneController {
           fx.mapsExtrudeWave(e.x, e.z);
         case 'routeComplete':
           fx.finaleShock(sim.rooftop.x, sim.rooftop.z);
+          _towerPower = 1.95;
         case 'googleLetter':
           if (e.index >= 0 && e.index < 6) _letterFlash[e.index] = 1;
           const lc = ['#1064FF', '#EE1F19', '#FFB300', '#1064FF', '#16A34A', '#EE1F19'];
@@ -682,10 +722,14 @@ class ShibuyaSceneController {
           _beacon
             ..color = vm.Vector3(c.x, c.y, c.z)
             ..intensity = 2.5 + (e.index + 1);
+          _bounce?.push(p.x, p.z, c);
+          _towerPower = math.min(2, _towerPower + 0.32);
         case 'roofVault':
           fx.roofVault(p);
+          _bounce?.pushHex(p.x, p.z, '#38BDF8');
         case 'carDeflect':
           _hazardZap = math.max(_hazardZap, 0.36);
+          _bounce?.pushHex(p.x, p.z, '#FF6B1A');
           fx.sparkBurst(p, 24, 1.35, 3.8, math.max(0, p.y - 0.85));
         case 'stumble':
           _hazardZap = 0.42;
@@ -697,11 +741,17 @@ class ShibuyaSceneController {
         case 'transfer':
           fx.sparkBurst(p, 22, 1.55, 4, math.max(0, p.y - 0.4));
         case 'boostRing':
-          if (e.index < world.rings.length) world.rings[e.index].glow.flash = 1;
+          if (e.index < world.rings.length) {
+            final g = world.rings[e.index].glow..flash = 1;
+            _bounce?.push(p.x, p.z, vm.Vector4(g.color.x, g.color.y, g.color.z, 1));
+          }
           fx.spawnArc(hero, p, 0.22);
           fx.sparkBurst(p, 24, 1.6, 3.4, math.max(0, p.y - 2.3));
         case 'pinGate':
-          if (e.index < world.pinGates.length) world.pinGates[e.index].flash = 1;
+          if (e.index < world.pinGates.length) {
+            final g = world.pinGates[e.index]..flash = 1;
+            _bounce?.push(p.x, p.z, vm.Vector4(g.color.x, g.color.y, g.color.z, 1));
+          }
           fx.spawnArc(hero, p, 0.26);
           fx.sparkBurst(p, 16, 1.3, 3.2, math.max(0, p.y - 3.2));
         case 'neonSlide':
@@ -713,6 +763,12 @@ class ShibuyaSceneController {
           final yaw = sim.spline.sample((pt['s'] as num).toDouble()).yaw;
           final rx = math.cos(yaw), rz = -math.sin(yaw);
           final crown = vm.Vector3(px, gy + 5.25, pz);
+          if (e.index < world.archRigs.length) {
+            final rig = world.archRigs[e.index];
+            final o = rig.orangeColor, c = rig.cyanColor;
+            _bounce?.push(px, pz, vm.Vector4(o.x, o.y, o.z, 1));
+            _bounce?.push(px, pz, vm.Vector4(c.x, c.y, c.z, 1));
+          }
           fx.spawnArc(hero, crown, 0.3);
           fx.spawnArc(vm.Vector3(px - rx * 5.6, gy + 4.4, pz - rz * 5.6), crown, 0.28);
           fx.spawnArc(vm.Vector3(px + rx * 5.6, gy + 4.4, pz + rz * 5.6), crown, 0.28);

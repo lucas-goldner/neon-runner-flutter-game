@@ -20,8 +20,10 @@ const _signPalette = ['#FF4F00', '#4285F4', '#EA4335', '#FBBC05', '#34A853', '#3
 /// A neon blade sign or wall billboard that ignites as Pegman approaches
 /// (`routeS - heroS <= 38`, glow 1.46 flash → 1.08; dormant glow 0.08).
 class NeonSign {
-  NeonSign(this.routeS, this.material, this.neon);
+  NeonSign(this.routeS, this.material, this.neon, this.pos);
   final double routeS;
+  /// Record position (`pos`), the ground-bounce light origin.
+  final vm.Vector3 pos;
   final fs.PhysicallyBasedMaterial material;
   final vm.Vector4 neon;
   bool lit = false;
@@ -181,7 +183,8 @@ class GlbWorld {
         bracketBuf.box(vm.Vector3(_d(d[0]) + lx * cy + lz * sy, g + e * a * 0.34, _d(d[2]) - lx * sy + lz * cy),
             vm.Vector3(0.12, 0.14, len), p);
       }
-      final s = NeonSign(_d(t['routeS'], _d(t['s'])), mat, color);
+      final s = NeonSign(_d(t['routeS'], _d(t['s'])), mat, color,
+          vm.Vector3(_d(d[0]) + nx * y, g, _d(d[2]) + nz * y));
       s.apply(0, r);
       signs.add(s);
     }
@@ -221,7 +224,9 @@ class GlbWorld {
       ref.add(tpl);
       final color = hexColor((t['accent'] as String?) ??
           _signPalette[(e + (tall ? 2 : 0)) % _signPalette.length]);
-      final s = NeonSign(_d(t['routeS'], _d(t['s'])), mat, color);
+      final tt = b + (tall ? 0.73 : 0.76) * x;
+      final s = NeonSign(_d(t['routeS'], _d(t['s'])), mat, color,
+          vm.Vector3(_d(r[0]) + _d(c[0]) * tt, sY, _d(r[2]) + _d(c[2]) * tt));
       s.apply(0, e);
       signs.add(s);
     }
@@ -233,7 +238,12 @@ class GlbWorld {
   }
 
   /// Per-frame sign ignition (port of the demo's glow update loop).
-  void updateSigns(double heroS, double dt, double time, {bool finale = false, bool reset = false}) {
+  ///
+  /// Returns the signs that ignited this frame within 18 m behind .. 38 m
+  /// ahead (the demo's `_pushSignLight(e.pos, e.color)` condition).
+  List<NeonSign> updateSigns(double heroS, double dt, double time,
+      {bool finale = false, bool reset = false}) {
+    final ignited = <NeonSign>[];
     for (int i = 0; i < signs.length; i++) {
       final e = signs[i];
       final n = e.routeS - heroS;
@@ -257,10 +267,12 @@ class GlbWorld {
           e.lit = true;
           e.flash = 1;
           e.glow = 1.46;
+          if (n > -18) ignited.add(e);
         }
       }
       e.apply(time, i);
     }
+    return ignited;
   }
 
   bool _inScramblePlaza(double x, double z) => world.inScramblePlaza(x, z);

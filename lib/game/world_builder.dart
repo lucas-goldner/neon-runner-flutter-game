@@ -170,6 +170,8 @@ class ShibuyaWorld {
         // roughness 1 x puddle map (A/B'd against the demo at 320/410).
         pbr(hexColor('#111C2D'), emissive: hexColor('#08101E', 0.24), roughness: 1.0, metallic: 1.0)
           ..metallicRoughnessTexture = tex.wetAsphalt
+          // world-space puddle map: one texture spans the whole plane
+          ..metallicRoughnessTextureTransform = fs.TextureTransform(scale: vm.Vector2.all(72 / 1180))
           // wg() normal map, repeat 280 over 1180 m (one tile / 4.2 m), scale .1
           ..normalTexture = tex.asphaltNormal
           ..normalScale = 0.1

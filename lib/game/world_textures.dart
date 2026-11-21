@@ -2,6 +2,7 @@ import 'dart:math' as math;
 import 'dart:typed_data';
 import 'dart:ui' as ui;
 
+import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:flutter/painting.dart';
 import 'package:flutter_scene/scene.dart' as fs;
 
@@ -265,30 +266,41 @@ class WorldTextures {
   }
 
   /// Puddle roughness map: the demo's `shibuyaWetSheen` FBM + micro breakup
-  /// baked into a tiling 256 px tile (G = roughness 0.34 wet .. 0.68 damp).
-  /// One tile spans 72 m of street.
+  /// baked in world space over the whole 1180 m asphalt plane (G = roughness
+  /// 0.34 wet .. 0.68 damp, B = metalness .06). Texel (i, j) is demo
+  /// (x, z) = (-590 + 1180 (i + .5) / n, -590 + 1180 (j + .5) / n).
+  static const int wetMapSize = 2048;
   static Future<fs.Texture2D> _wetRoughness() async {
-    const n = 256;
-    const metres = 72.0;
+    const n = wetMapSize;
+    const metres = 1180.0;
     final px = Uint8List(n * n * 4);
     double smooth(double e0, double e1, double x) {
       final t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
       return t * t * (3 - 2 * t);
     }
 
+    final sw = Stopwatch()..start();
     for (int j = 0; j < n; j++) {
+      final wz = -590 + (j + 0.5) / n * metres;
       for (int i = 0; i < n; i++) {
-        final wx = i / n * metres, wz = j / n * metres;
-        // FBM with the demo's rotation matrix (tiling approximated by
-        // sampling a torus-wrapped domain).
+        final wx = -590 + (i + 0.5) / n * metres;
         var qx = wx * 0.028, qz = wz * 0.028;
         var v = _vn(qx, qz) * 0.44;
-        for (final (amp, sc, ox, oz) in [(0.30, 2.15, 11.3, 7.1), (0.17, 2.08, 23.7, 17.9), (0.09, 2.12, 5.1, 13.4)]) {
-          final rx = 0.8 * qx + 0.6 * qz, rz = -0.6 * qx + 0.8 * qz;
-          qx = rx * sc + ox;
-          qz = rz * sc + oz;
-          v += _vn(qx, qz) * amp;
-        }
+        // GLSL mat2(.8, -.6, .6, .8) (column-major) * q.
+        var rx = 0.8 * qx + 0.6 * qz, rz = -0.6 * qx + 0.8 * qz;
+        qx = rx * 2.15 + 11.3;
+        qz = rz * 2.15 + 7.1;
+        v += _vn(qx, qz) * 0.30;
+        rx = 0.8 * qx + 0.6 * qz;
+        rz = -0.6 * qx + 0.8 * qz;
+        qx = rx * 2.08 + 23.7;
+        qz = rz * 2.08 + 17.9;
+        v += _vn(qx, qz) * 0.17;
+        rx = 0.8 * qx + 0.6 * qz;
+        rz = -0.6 * qx + 0.8 * qz;
+        qx = rx * 2.12 + 5.1;
+        qz = rz * 2.12 + 13.4;
+        v += _vn(qx, qz) * 0.09;
         final wet = smooth(0.28, 0.78, v);
         final micro = _vn(wx * 0.24 + 3.7, wz * 0.24 - 5.1);
         final fine = _vn(wx * 0.72 - 9.2, wz * 0.72 + 4.4);
@@ -297,11 +309,13 @@ class WorldTextures {
         final o = (j * n + i) * 4;
         px[o] = 255;
         px[o + 1] = (rough * 255).round();
-        px[o + 2] = (0.06 * 255).round();
+        px[o + 2] = 15;
         px[o + 3] = 255;
       }
     }
-    return fs.Texture2D.fromPixels(px, n, n, content: fs.TextureContent.data);
+    debugPrint('wet asphalt map baked in ${sw.elapsedMilliseconds} ms');
+    return fs.Texture2D.fromPixels(px, n, n,
+        content: fs.TextureContent.data, sampling: const fs.TextureSampling(maxAnisotropy: 4));
   }
 
   static double _lgh(double e, double t) {
