@@ -77,7 +77,10 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     }
     if (_stopAfterNext) {
       _stopped = true;
-      debugPrint('stopped: ffframes');
+      final h = _controller.sim;
+      debugPrint('stopped: ffframes ${_state.phase.name} ${h.move.name} s=${h.s.toStringAsFixed(2)} '
+          'lat=${h.lateral.toStringAsFixed(2)} y=${h.y.toStringAsFixed(2)} lane=${h.laneIndex} '
+          'v=${h.speed.toStringAsFixed(2)} flip=${h.flipStyle} ${h.flipPhase.toStringAsFixed(2)}');
     }
     // `&stopat=<meters>`: run live, then hold the frame once the hero
     // reaches that route distance (debug captures of in-motion FX).
@@ -101,9 +104,9 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
 
   void _debugHooks() {
     if (!_controller.initialized) return;
-    if (!_autoStarted && _q['autoplay'] == '1' && _state.phase == AppPhase.mapsTitle) {
+    if (!_autoStarted && (_q['autoplay'] == '1' || _q['manual'] == '1') && _state.phase == AppPhase.mapsTitle) {
       _autoStarted = true;
-      if (!_state.autoPilot) _state.toggleAutoPilot();
+      if (_q['manual'] != '1' && !_state.autoPilot) _state.toggleAutoPilot();
       _controller.startNewRun();
     }
     final seek = double.tryParse(_q['seek'] ?? '');
@@ -118,7 +121,28 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     final ff = int.tryParse(_q['ffframes'] ?? '');
     if (ff != null && !_seekDone && _state.phase == AppPhase.skyDrop) {
       _seekDone = true;
+      // `&script=240:R,270:J,...`: frame-exact taps (L/R lane, J jump,
+      // S slide) for side-by-side movement tests against the demo.
+      final script = <int, List<String>>{};
+      for (final part in (_q['script'] ?? '').split(',')) {
+        final kv = part.split(':');
+        if (kv.length == 2) (script[int.tryParse(kv[0]) ?? -1] ??= []).add(kv[1]);
+      }
       for (int i = 1; i < ff; i++) {
+        for (final a in script[i] ?? const <String>[]) {
+          switch (a) {
+            case 'L':
+              _controller.moveLane(-1);
+              _controller.releaseLane(-1);
+            case 'R':
+              _controller.moveLane(1);
+              _controller.releaseLane(1);
+            case 'J':
+              _controller.jump();
+            case 'S':
+              _controller.slide();
+          }
+        }
         _controller.tick(1 / 60);
       }
       _stopAfterNext = true;
@@ -185,6 +209,12 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
   }
 
   KeyEventResult _onKey(FocusNode node, KeyEvent event) {
+    if (event is KeyUpEvent) {
+      final k = event.logicalKey;
+      if (k == LogicalKeyboardKey.keyA || k == LogicalKeyboardKey.arrowLeft) _controller.releaseLane(-1);
+      if (k == LogicalKeyboardKey.keyD || k == LogicalKeyboardKey.arrowRight) _controller.releaseLane(1);
+      return KeyEventResult.ignored;
+    }
     if (event is! KeyDownEvent) return KeyEventResult.ignored;
     final k = event.logicalKey;
     if (_state.phase == AppPhase.mapsTitle) {
@@ -234,7 +264,9 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     if (delta.distance < 26) return;
     _swipeHandled = true;
     if (delta.dx.abs() > delta.dy.abs()) {
-      _controller.moveLane(delta.dx > 0 ? 1 : -1);
+      final dir = delta.dx > 0 ? 1 : -1;
+      _controller.moveLane(dir);
+      _controller.releaseLane(dir);
     } else if (delta.dy < 0) {
       _controller.jump();
     } else {

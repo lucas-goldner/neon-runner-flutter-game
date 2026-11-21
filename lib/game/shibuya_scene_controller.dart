@@ -45,6 +45,8 @@ class ShibuyaSceneController {
   final List<fs.Node> _carShadows = [];
   final List<fs.Node> _underglows = [];
   late final NeonFx fx;
+  final fs.PointLight _beacon =
+      fs.PointLight(color: vm.Vector3(0.0545, 0.2346, 0.9047), intensity: 0.4, range: 68);
   double _hazardZap = 0;
   final FxFrame _fxf = FxFrame();
   PegmanPoseResult? _pose;
@@ -77,6 +79,12 @@ class ShibuyaSceneController {
     sim = HeroSim(level, state);
     state.setLoading(0.32, 'Lighting Shibuya night sky...');
     _configureLighting();
+    // cityRimLight: DirectionalLight(#FFB778, .24) from (-55, 28, 78) to
+    // the origin (Flutter frame: z mirrored).
+    scene.add(fs.Node(name: 'CityRimLight')
+      ..addComponent(fs.DirectionalLightComponent.aimed(
+          fs.DirectionalLight(color: vm.Vector3(1.0, 0.4678, 0.1845), intensity: 0.24),
+          vm.Vector3(55, -28, 78).normalized())));
     try {
       scene.environment = await NeonEnvironment.build();
     } catch (_) {
@@ -97,6 +105,17 @@ class ShibuyaSceneController {
     scene.add(world.root);
     state.setLoading(0.8, 'Preparing Pegman...');
     pegman = GlbPegman(glb)..attach(world.refRoot);
+    // googleBeaconLight: PointLight(#4285F4, .4, 68) 6 m in front of the
+    // sign's middle letter, 1.5 m up.
+    {
+      final gt = level.meta['googleTower'] as Map<String, dynamic>;
+      final sc = gt['signCenter'] as List<dynamic>;
+      final r = (gt['facingYaw'] as num).toDouble();
+      world.refRoot.add(fs.Node(name: 'GoogleBeaconLight')
+        ..position = vm.Vector3((sc[0] as num).toDouble() + math.sin(r) * 6,
+            (sc[1] as num).toDouble() + 1.5, (sc[2] as num).toDouble() + math.cos(r) * 6)
+        ..addComponent(fs.PointLightComponent(_beacon)));
+    }
     state.setLoading(0.86, 'Loading Tokyo street fleet...');
     _buildTraffic();
     _buildTrains();
@@ -352,6 +371,9 @@ class ShibuyaSceneController {
     pegman.resetTrail();
     fx.reset();
     sim.events.clear();
+    _beacon
+      ..color = vm.Vector3(0.0545, 0.2346, 0.9047)
+      ..intensity = 0.4;
     _firstPill = true;
     _camInit = false;
     _poPreset = null;
@@ -371,6 +393,7 @@ class ShibuyaSceneController {
   }
 
   void moveLane(int dir) => sim.moveLane(dir);
+  void releaseLane(int dir) => sim.releaseLane(dir);
 
   void jump() {
     if (state.phase == AppPhase.playing && !state.autoPilot) sim.pressJump();
@@ -637,6 +660,15 @@ class ShibuyaSceneController {
           fx.mapsExtrudeWave(e.x, e.z);
         case 'routeComplete':
           fx.finaleShock(sim.rooftop.x, sim.rooftop.z);
+          _beacon
+            ..color = vm.Vector3(0.0545, 0.2346, 0.9047)
+            ..intensity = 8;
+        case 'googleLetter':
+          const lc = ['#4285F4', '#EA4335', '#FBBC05', '#4285F4', '#34A853', '#EA4335'];
+          final c = hexColor(lc[e.index.clamp(0, 5)]);
+          _beacon
+            ..color = vm.Vector3(c.x, c.y, c.z)
+            ..intensity = 2.5 + (e.index + 1);
         case 'roofVault':
           fx.roofVault(p);
         case 'carDeflect':

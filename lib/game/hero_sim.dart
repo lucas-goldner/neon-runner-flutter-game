@@ -417,6 +417,16 @@ class HeroSim {
     events.add(SimEvent(kind, px ?? x, py ?? y, pz ?? z, index: index, value: value));
   }
 
+  /// Key release (`_onKeyUp` -> `_syncHoldKeysToEngine`): the held lane
+  /// flags only stay set while A/D is down.
+  void releaseLane(int dir) {
+    if (dir < 0) {
+      inLeft = false;
+    } else {
+      inRight = false;
+    }
+  }
+
   void pressJump() => _jump = true;
   void pressSlide() => _slide = true;
   void moveLane(int dir) {
