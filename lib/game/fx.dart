@@ -103,10 +103,10 @@ class NeonFx {
     root.add(_sparkNode);
 
     // Contact shadow (Fg): radial gradient rgba(2,5,12,.85 -> .52 -> 0).
-    _shadowMat = fs.UnlitMaterial(colorTexture: _contactShadowTexture())
+    _shadowMat = fs.UnlitMaterial(colorTexture: contactShadowTexture())
       ..alphaMode = fs.AlphaMode.blend
       ..baseColorFactor = vm.Vector4(1, 1, 1, 0.58);
-    _shadowNode = fs.Node(name: 'PegmanGroundContactShadow', mesh: fs.Mesh(_quadXZ(1.55), _shadowMat));
+    _shadowNode = fs.Node(name: 'PegmanGroundContactShadow', mesh: fs.Mesh(quadXZ(1.55), _shadowMat));
     root.add(_shadowNode);
 
     // Arc bolts (LineBasicMaterial 0xFFE6B5, opacity .95, additive).
@@ -662,7 +662,41 @@ class NeonFx {
     return fs.Texture2D.fromPixels(px, w, h);
   }
 
-  static fs.Texture2D _contactShadowTexture() {
+  /// `Ig()`: elliptical radial glow (white .92 -> .48 -> 0), 128 x 256.
+  static fs.Texture2D underglowTexture() {
+    const w = 128, h = 256;
+    final px = Uint8List(w * h * 4);
+    for (int y = 0; y < h; y++) {
+      for (int x = 0; x < w; x++) {
+        // canvas scaled (.5, 1) around the centre: ellipse radius 59 x 118
+        final dx = (x + 0.5 - 64) / 0.5, dy = y + 0.5 - 128;
+        final r = math.sqrt(dx * dx + dy * dy);
+        final t = ((r - 10) / (118 - 10)).clamp(0.0, 1.0);
+        final a = r > 118
+            ? 0.0
+            : (t < 0.45 ? _lerp(0.92, 0.48, t / 0.45) : _lerp(0.48, 0.0, (t - 0.45) / 0.55));
+        final i = (y * w + x) * 4;
+        px[i] = 255;
+        px[i + 1] = 255;
+        px[i + 2] = 255;
+        px[i + 3] = (a * 255).round();
+      }
+    }
+    return fs.Texture2D.fromPixels(px, w, h);
+  }
+
+  /// Flat w x l rectangle on the XZ plane (both windings), for decals.
+  static fs.MeshGeometry rectXZ(double w, double l) {
+    final hw = w / 2, hl = l / 2;
+    return fs.MeshGeometry.fromArrays(
+      positions: Float32List.fromList([-hw, 0, -hl, hw, 0, -hl, hw, 0, hl, -hw, 0, hl]),
+      normals: Float32List.fromList([0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0]),
+      texCoords: Float32List.fromList([0, 0, 1, 0, 1, 1, 0, 1]),
+      indices: [0, 2, 1, 0, 3, 2, 0, 1, 2, 0, 2, 3],
+    );
+  }
+
+  static fs.Texture2D contactShadowTexture() {
     const n = 128;
     final px = Uint8List(n * n * 4);
     for (int y = 0; y < n; y++) {
@@ -711,7 +745,7 @@ class NeonFx {
     return fs.Texture2D.fromPixels(px, w, h);
   }
 
-  static fs.MeshGeometry _quadXZ(double size) {
+  static fs.MeshGeometry quadXZ(double size) {
     final h = size / 2;
     return fs.MeshGeometry.fromArrays(
       positions: Float32List.fromList([-h, 0, -h, h, 0, -h, h, 0, h, -h, 0, h]),

@@ -91,7 +91,11 @@ class _NeonScrambleGameScreenState extends State<NeonScrambleGameScreen>
     final stopAt = double.tryParse(_q['stopat'] ?? '');
     if (stopAt != null && _seekDone && _controller.sim.s >= stopAt) {
       _stopped = true;
-      debugPrint('stopped: s=${_controller.sim.s.toStringAsFixed(1)} move=${_controller.sim.move.name}');
+      final c = _controller;
+      debugPrint('stopped: s=${c.sim.s.toStringAsFixed(1)} move=${c.sim.move.name} '
+          'hero=(${c.sim.x.toStringAsFixed(2)},${c.sim.y.toStringAsFixed(2)},${c.sim.z.toStringAsFixed(2)}) lat=${c.sim.lateral.toStringAsFixed(2)} '
+          'cam=(${c.camPos.x.toStringAsFixed(2)},${c.camPos.y.toStringAsFixed(2)},${c.camPos.z.toStringAsFixed(2)}) '
+          'tgt=(${c.camTarget.x.toStringAsFixed(2)},${c.camTarget.y.toStringAsFixed(2)},${c.camTarget.z.toStringAsFixed(2)}) fov=${c.camFov.toStringAsFixed(1)}');
     }
   }
 

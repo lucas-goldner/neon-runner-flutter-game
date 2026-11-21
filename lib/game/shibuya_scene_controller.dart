@@ -41,6 +41,9 @@ class ShibuyaSceneController {
   late final GlbLibrary glb;
   final List<fs.Node> _taxiNodes = [];
   final List<fs.Node> _driftNodes = [];
+  final List<({fs.Node node, double x, double z, double yaw, String? underglow})> _parked = [];
+  final List<fs.Node> _carShadows = [];
+  final List<fs.Node> _underglows = [];
   late final NeonFx fx;
   double _hazardZap = 0;
   final FxFrame _fxf = FxFrame();
@@ -180,6 +183,89 @@ class ShibuyaSceneController {
     }
     for (final c in sim.drift) {
       _driftNodes.add(_car(c.type));
+    }
+    _buildParkedCarMeet();
+    // InstFleet_ContactShadows (2.65 x 5.45, opacity .72) and
+    // InstFleet_DriftUnderglow (2.75 x 5.25, additive, opacity .58).
+    final shadowGeo = NeonFx.rectXZ(2.65, 5.45);
+    final shadowMat = fs.UnlitMaterial(colorTexture: NeonFx.contactShadowTexture())
+      ..alphaMode = fs.AlphaMode.blend
+      ..baseColorFactor = vm.Vector4(1, 1, 1, 0.72);
+    final glowGeo = NeonFx.rectXZ(2.75, 5.25);
+    final glowTex = NeonFx.underglowTexture();
+    final n = _taxiNodes.length + _driftNodes.length + _parked.length;
+    for (int i = 0; i < n; i++) {
+      final sh = fs.Node(name: 'CarContactShadow_$i', mesh: fs.Mesh(shadowGeo, shadowMat));
+      world.refRoot.add(sh);
+      _carShadows.add(sh);
+    }
+    final glowCars = [
+      for (final c in sim.drift) c.underglow,
+      for (final p in _parked)
+        if (p.underglow != null) p.underglow!,
+    ];
+    for (final hex in glowCars) {
+      final m = fs.UnlitMaterial(colorTexture: glowTex)
+        ..alphaMode = fs.AlphaMode.blend
+        ..baseColorFactor = hexColor(hex, 1.6, 0.58);
+      final g = fs.Node(name: 'CarUnderglow', mesh: fs.Mesh(glowGeo, m));
+      world.refRoot.add(g);
+      _underglows.add(g);
+    }
+  }
+
+  /// `_buildParkedCarMeetSlots`: up to 10 tuner cars parked 8.4 m off the
+  /// route every 7 waypoints (alternating sides, nose angled .22 rad).
+  void _buildParkedCarMeet() {
+    const kinds = [
+      ('DriftWidebodyOrange', '#FF4F00'),
+      ('GtrMidnightBlue', '#38BDF8'),
+      ('PandaHatch86', '#34A853'),
+      ('TunerPearlSilver', '#4285F4'),
+      ('CrownComfortTaxi', null),
+    ];
+    final e = level.waypoints;
+    for (int n = 6; n < e.length - 8 && _parked.length < 10; n += 7) {
+      final r = e[n];
+      if (r.s < 75 || r.y > 0.25 || world.inScramblePlaza(r.x, r.z)) continue;
+      final i = e[math.min(e.length - 1, n + 1)];
+      final a = i.x - r.x, o = i.z - r.z, sl = math.sqrt(a * a + o * o);
+      if (sl < 0.2) continue;
+      final c = a / sl, l = o / sl, u = o / sl, d = -a / sl;
+      final f = _parked.length % 2 == 0 ? 1.0 : -1.0;
+      final m = r.x + u * f * 8.4, h = r.z + d * f * 8.4;
+      if (world.inScramblePlaza(m, h) || world.insideBuilding(m, h, 2.4)) continue;
+      final k = kinds[_parked.length % kinds.length];
+      final node = _car(k.$1);
+      final yaw = math.atan2(c, l) + f * 0.22;
+      node.localTransform = GlbLibrary.slot(m, 0.18, h, yaw);
+      _parked.add((node: node, x: m, z: h, yaw: yaw, underglow: k.$2));
+    }
+  }
+
+  void _syncCarDecals() {
+    final visible = _mapsMorph > 0.03;
+    final glowOn = visible && math.sqrt(math.pow(camPos.x - 4.5, 2) + math.pow(camPos.z + 1, 2)) <= 190;
+    int si = 0, gi = 0;
+    void place(double x, double y, double z, double yaw, bool show, String? glow) {
+      final sh = _carShadows[si++];
+      sh.visible = visible && show;
+      sh.localTransform = GlbLibrary.slot(x, y + 0.024, z, yaw);
+      if (glow != null && gi < _underglows.length) {
+        final g = _underglows[gi++];
+        g.visible = glowOn && show;
+        g.localTransform = GlbLibrary.slot(x, y + 0.036, z, yaw);
+      }
+    }
+
+    for (final t in sim.taxis) {
+      place(t.x, t.y, t.z, t.yaw, t.active, null);
+    }
+    for (final c in sim.drift) {
+      place(c.x, 0, c.z, c.yaw, true, c.underglow);
+    }
+    for (final p in _parked) {
+      place(p.x, 0.18, p.z, p.yaw, true, p.underglow);
     }
   }
 
@@ -440,6 +526,7 @@ class ShibuyaSceneController {
       final n = _driftNodes[i];
       n.localTransform = GlbLibrary.slot(c.x, 0, c.z, c.yaw);
     }
+    _syncCarDecals();
   }
 
   void _syncHero(double dt) {

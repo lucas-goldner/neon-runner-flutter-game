@@ -62,7 +62,13 @@ class WallRt {
         side = (data['side'] as num).toDouble(),
         lateralOffset = (data['lateralOffset'] as num).toDouble(),
         y = ((data['points'] as List<dynamic>).first[1] as num).toDouble(),
+        line = Polyline3([
+          for (final p in data['points'] as List<dynamic>)
+            vm.Vector3((p[0] as num).toDouble(), (p[1] as num).toDouble(), (p[2] as num).toDouble()),
+        ]),
         transfersTo = data['transfersToRailId'] as String?;
+  /// The wall's own spline (`wallSplines[i]`), sampled by run fraction.
+  final Polyline3 line;
   final Map<String, dynamic> data;
   final String id;
   final double startS, endS, side, lateralOffset, y;
@@ -782,7 +788,9 @@ class HeroSim {
         final a = w.side * math.min(w.lateralOffset - 0.85, f);
         lateral += (a - lateral) * math.min(1, dt * 12);
         lateralVel = 0;
-        final targetY = math.max(d.y + 1.85, w.y + 1.15) + math.sin(n * math.pi) * 0.55;
+        // i = nh(wallSpline, n): the wall descends along Miyamasuzaka etc.
+        final wy = math.max(0.0, w.line.at(n).y);
+        final targetY = math.max(d.y + 1.85, wy + 1.15) + math.sin(n * math.pi) * 0.55;
         y += (targetY - y) * math.min(1, dt * 12);
         vy = 0;
         x = d.x + d.rx * lateral;

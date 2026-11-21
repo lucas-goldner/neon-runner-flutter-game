@@ -1,3 +1,4 @@
+import 'dart:typed_data';
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
@@ -36,15 +37,21 @@ double _lg(double e, double t) {
 
 /// Facade texture pair (base colour + emissive) — port of the demo's `jg()`.
 class FacadeTex {
-  FacadeTex(this.map, this.emissive);
+  FacadeTex(this.map, this.emissive, this.roughness);
   final fs.Texture2D map;
   final fs.Texture2D emissive;
+
+  /// glTF metallic-roughness texture: G = the demo's roughnessMap canvas
+  /// (#C2C2C2 walls, #212121/#292929 glass, #B8B8B8 mullions), B = 1 so
+  /// metalness stays the material's constant factor like three.js.
+  final fs.Texture2D roughness;
 
   static Future<FacadeTex> create(int seed, String kind) async {
     final r = mulberry32(seed);
     const i = 1024.0, a = 1024.0;
-    final rb = ui.PictureRecorder(), re = ui.PictureRecorder();
-    final s = Canvas(rb), l = Canvas(re);
+    final rb = ui.PictureRecorder(), re = ui.PictureRecorder(), rr = ui.PictureRecorder();
+    final s = Canvas(rb), l = Canvas(re), dd = Canvas(rr);
+    dd.drawRect(const Rect.fromLTWH(0, 0, i, a), Paint()..color = const Color(0xFFC2C2C2));
     final tower = kind == 'tower', commercial = kind == 'commercial';
     s.drawRect(const Rect.fromLTWH(0, 0, i, a),
         Paint()..color = Color(tower ? 0xFF2E405E : commercial ? 0xFF31425C : 0xFF324056));
@@ -80,6 +87,7 @@ class FacadeTex {
       s.drawRect(Rect.fromLTWH(0, t, i, bh),
           Paint()..color = Color(band ? 0xFF162033 : (tower ? 0xFF1B2A42 : 0xFF1D293E)));
       s.drawRect(Rect.fromLTWH(0, t + bh - 3, i, 3), Paint()..color = Color(tower ? 0xFF435C82 : 0xFF354868));
+      dd.drawRect(Rect.fromLTWH(0, t, i, bh + 2), Paint()..color = const Color(0xFFC2C2C2));
       if (band) {
         for (double y = t + 8; y < t + bh - 6; y += 6) {
           s.drawRect(Rect.fromLTWH(4, y, 1016, 2), Paint()..color = const Color(0xFF101726));
@@ -102,9 +110,12 @@ class FacadeTex {
         } else {
           s.drawRect(rect, Paint()..color = const Color(0xFF1D2C45));
         }
+        dd.drawRect(rect, Paint()..color = Color(tower ? 0xFF212121 : 0xFF292929));
         if (pw > 28) {
           s.drawRect(Rect.fromLTWH((ax + pw * 0.5).roundToDouble(), fy, 2, vh),
               Paint()..color = const Color(0xFF182336));
+          dd.drawRect(Rect.fromLTWH((ax + pw * 0.5).roundToDouble(), fy, 2, vh),
+              Paint()..color = const Color(0xFFB8B8B8));
         }
         if (u && r() < c) {
           final col = hex(tower && !lit && r() < 0.25 ? '#FFD699' : g);
@@ -134,7 +145,17 @@ class FacadeTex {
     }
     final mi = await rb.endRecording().toImage(i.toInt(), a.toInt());
     final ei = await re.endRecording().toImage(i.toInt(), a.toInt());
-    return FacadeTex(await fs.Texture2D.fromImage(mi), await fs.Texture2D.fromImage(ei));
+    final ri = await rr.endRecording().toImage(i.toInt(), a.toInt());
+    final rbytes = (await ri.toByteData(format: ui.ImageByteFormat.rawStraightRgba))!.buffer.asUint8List();
+    final mr = Uint8List(rbytes.length);
+    for (int k = 0; k < rbytes.length; k += 4) {
+      mr[k] = 255;
+      mr[k + 1] = rbytes[k + 1];
+      mr[k + 2] = 255;
+      mr[k + 3] = 255;
+    }
+    return FacadeTex(await fs.Texture2D.fromImage(mi), await fs.Texture2D.fromImage(ei),
+        fs.Texture2D.fromPixels(mr, i.toInt(), a.toInt(), content: fs.TextureContent.data));
   }
 }
 
@@ -302,10 +323,11 @@ class OsmCity {
     final cm = await FacadeTex.create(14598366 + 23, 'commercial');
     final lo = await FacadeTex.create(14598366 + 37, 'low');
     fs.PhysicallyBasedMaterial mat(FacadeTex t, String base, String em, double ei, double metal) =>
-        fs.PhysicallyBasedMaterial(baseColorTexture: t.map, emissiveTexture: t.emissive)
+        fs.PhysicallyBasedMaterial(
+            baseColorTexture: t.map, emissiveTexture: t.emissive, metallicRoughnessTexture: t.roughness)
           ..baseColorFactor = hexColor(base)
-          ..emissiveFactor = hexColor(em, ei * 1.35)
-          ..roughnessFactor = 0.72
+          ..emissiveFactor = hexColor(em, ei)
+          ..roughnessFactor = 1
           ..metallicFactor = metal
           ..doubleSided = true;
     void add(MeshBuf b, fs.Material m, String name) {
@@ -313,6 +335,10 @@ class OsmCity {
       world.refRoot.add(fs.Node(name: name, mesh: fs.Mesh(b.build(), m)));
     }
 
+    if (Uri.base.queryParameters['dumpb'] == '1') {
+      // ignore: avoid_print
+      print('BOUNDS ${bounds.map((b) => b.map((v) => v.toStringAsFixed(1)).join(',')).join(';')}');
+    }
     add(towers, mat(tw, '#9AB4DC', '#A8CEFF', 0.78, 0.3), 'OsmSkyscrapers230m');
     add(mids, mat(cm, '#90A8CC', '#CFE2FF', 0.66, 0.22), 'OsmCommercialMidrise');
     add(lows, mat(lo, '#8EA2C2', '#FFE0B2', 0.58, 0.14), 'OsmShibuyaBlocks');

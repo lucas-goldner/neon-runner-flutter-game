@@ -106,6 +106,9 @@ class ShibuyaWorld {
     _grindRails();
     _wallRuns();
     _river();
+    _secondaryRoads();
+    _transferGuides();
+    _ringPiers();
     _barriers();
     _distantSkyline();
     glbWorld = GlbWorld(this, glb)..build();
@@ -376,13 +379,22 @@ class ShibuyaWorld {
 
   // ------------------------------------------------------------ grind rails
   void _grindRails() {
-    final posts = MeshBuf();
+    // _buildGrindRailsAndSupportPiers: steel piers r (#336455 x? -> #334155
+    // rough .42 metal .78), concrete i (#2B3952 rough .74), girders a under
+    // hero / ramp / sky rails (#1E2A3F rough .48 metal .68).
+    final steel = MeshBuf(), concrete = MeshBuf(), girders = MeshBuf();
+    vm.Vector3 v(double x, double y, double z) => w3(x, y, z);
+    void bar(MeshBuf m, double x0, double y0, double z0, double x1, double y1, double z1, [double c = 0.095]) {
+      if (math.sqrt(math.pow(x1 - x0, 2) + math.pow(y1 - y0, 2) + math.pow(z1 - z0, 2)) < 0.08) return;
+      m.cylinder(v(x0, y0, z0), v(x1, y1, z1), c, c * 1.12);
+    }
+
     for (final r in level.route['grindRails'] as List<dynamic>) {
-      final pts = [
+      final raw = [
         for (final p in r['points'] as List<dynamic>)
-          w3((p[0] as num).toDouble(), (p[1] as num).toDouble(),
-              (p[2] as num).toDouble()),
+          vm.Vector3((p[0] as num).toDouble(), (p[1] as num).toDouble(), (p[2] as num).toDouble()),
       ];
+      final pts = [for (final p in raw) w3(p.x, p.y, p.z)];
       final isHero = r['heroRailLaunch'] == true;
       final radius = isHero ? 0.14 : 0.105;
       final rb = MeshBuf();
@@ -392,23 +404,48 @@ class ShibuyaWorld {
           metallic: 0.72, roughness: 0.18);
       railMats.add(rm);
       _add(rb, rm, 'GrindRail_${r['id']}');
+      if (isHero || r['kind'] == 'ramp_rail' || r['kind'] == 'yamanote_sky_rail') {
+        _tube(girders, [for (final p in raw) w3(p.x, math.max(0.14, p.y - 0.28), p.z)], isHero ? 0.28 : 0.15,
+            sides: 6);
+      }
       for (final p in (r['posts'] as List<dynamic>? ?? const [])) {
-        final x = (p['x'] as num).toDouble(), z = (p['z'] as num).toDouble();
-        final yb = (p['yBase'] as num?)?.toDouble() ?? 0;
-        final yt = (p['yTop'] as num?)?.toDouble() ?? 4;
-        posts.box(w3(x, (yb + yt) / 2, z), vm.Vector3(0.22, yt - yb, 0.22), 0);
-        if (p['cantilevered'] == true && p['railX'] != null) {
-          final rx = (p['railX'] as num).toDouble(),
-              rz = (p['railZ'] as num).toDouble();
-          final mid = w3((x + rx) / 2, yt - 0.08, (z + rz) / 2);
-          final len = math.sqrt((rx - x) * (rx - x) + (rz - z) * (rz - z));
-          posts.box(mid, vm.Vector3(0.14, 0.14, len),
-              yawFromDir(rx - x, rz - z));
+        double d(String k, double f) => (p[k] as num?)?.toDouble() ?? f;
+        final x = d('x', 0), z = d('z', 0);
+        final n = d('yBase', 0), a = d('yTop', 1);
+        final o = math.max(0.18, a - n);
+        if (p['cantilevered'] == true && p['railX'] != null && p['railZ'] != null) {
+          final rx = d('railX', x), rz = d('railZ', z);
+          concrete.box(v(x, n + 0.17, z), vm.Vector3(0.68, 0.34, 0.68), 0);
+          final c = math.max(0.4, o - 0.12);
+          steel.cylinder(v(x, n + 0.24, z), v(x, n + 0.24 + c, z), 0.15, 0.2);
+          final u = a - 0.12;
+          bar(steel, x, u, z, rx, u, rz, 0.095);
+          final mx = x + (rx - x) * 0.64, mz = z + (rz - z) * 0.64;
+          bar(steel, x, math.max(n + 2.65, u - 0.95), z, mx, u - 0.04, mz, 0.068);
+          steel.cylinder(v(rx, a - 0.14, rz), v(rx, a, rz), 0.11, 0.13);
+        } else if (o > 2.2) {
+          concrete.box(v(x, n + 0.225, z), vm.Vector3(1.85, 0.45, 1.85), 0);
+          final top = a - (isHero ? 0.34 : 0.16);
+          final cap = math.max(n + 0.55, top - 0.44);
+          final sh = math.max(0.28, cap - (n + 0.45));
+          concrete.cylinder(v(x, n + 0.45, z), v(x, n + 0.45 + sh, z), 0.36, 0.52);
+          final ch = math.max(0.18, top - cap);
+          concrete.cylinder(v(x, (top + cap) / 2 - ch / 2, z), v(x, (top + cap) / 2 + ch / 2, z),
+              isHero ? 0.42 : 0.52, 0.36);
+        } else if (isHero && n >= 20) {
+          steel.cylinder(v(x, n, z), v(x, n + 0.14, z), 0.26, 0.34, seg: 12);
+          final h = math.max(0.14, o - 0.16);
+          steel.cylinder(v(x, n, z), v(x, n + h, z), 0.11, 0.14);
+        } else {
+          steel.cylinder(v(x, n, z), v(x, n + 0.06, z), 0.16, 0.18);
+          final h = math.max(0.14, o - (isHero ? 0.16 : 0.06));
+          steel.cylinder(v(x, n, z), v(x, n + h, z), 0.065, 0.085, seg: 6);
         }
       }
     }
-    _add(posts, pbr(hexColor('#334155'), metallic: 0.78, roughness: 0.42),
-        'rail_posts');
+    _add(steel, pbr(hexColor('#334155'), metallic: 0.78, roughness: 0.42), 'GrindRailCantileverPiers');
+    _add(girders, pbr(hexColor('#1E2A3F'), metallic: 0.68, roughness: 0.48), 'GrindRailStructuralGirders');
+    _add(concrete, pbr(hexColor('#2B3952'), metallic: 0.16, roughness: 0.74), 'HeroLaunchConcretePiers');
   }
 
   void _tube(MeshBuf buf, List<vm.Vector3> pts, double r, {int sides = 8}) {
@@ -513,6 +550,125 @@ class ShibuyaWorld {
   }
 
 
+
+  // ----------------------------------- BoostRingCantileverPiers (demo)
+  /// Steel cantilever piers for rings elevated over traffic (#1B2434,
+  /// rough .42, metal .78).
+  void _ringPiers() {
+    final o = MeshBuf();
+    double d(dynamic v, [double f = 0]) => (v as num?)?.toDouble() ?? f;
+    double lerp(double a, double b, double t) => a + (b - a) * t;
+    void bar(double x0, double y0, double z0, double x1, double y1, double z1, double c) {
+      o.cylinder(vm.Vector3(x0, y0, z0), vm.Vector3(x1, y1, z1), c, c);
+    }
+
+    for (final t in level.route['boostRings'] as List<dynamic>) {
+      if (t['elevatedOverTraffic'] != true || t['pierX'] == null || t['pierZ'] == null) continue;
+      final pos = t['pos'] as List<dynamic>;
+      final gy = t['groundY'] != null ? d(t['groundY']) : (d(pos[1]) > 7.8 ? 7.5 : 0.0);
+      final r = t['bottomY'] != null ? d(t['bottomY']) : gy;
+      final s = r - gy;
+      if (s < 0.5) continue;
+      final l = d(pos[0]), u = d(pos[2]), px = d(t['pierX']), pz = d(t['pierZ']), yaw = d(t['yaw']);
+      final m = s + 0.34;
+      o.box(vm.Vector3(px, gy + m * 0.5, pz), vm.Vector3(0.28, m, 0.28), yaw);
+      o.box(vm.Vector3(px, gy + 0.11, pz), vm.Vector3(0.62, 0.22, 0.62), yaw);
+      final yb = r + 0.08, vx = l - px, vz = u - pz, b = math.sqrt(vx * vx + vz * vz);
+      if (b > 0.1) {
+        o.box(vm.Vector3((px + l) / 2, yb, (pz + u) / 2), vm.Vector3(0.24, 0.2, b + 0.36), math.atan2(vx, vz));
+        final tt = gy + (s >= 2.2 ? 1.94 : 1.69);
+        bar(px, math.max(tt, r - 0.31), pz, lerp(px, l, 0.48), r + 0.04, lerp(pz, u, 0.48), 0.075);
+        bar(px, r + 0.3, pz, lerp(px, l, 0.62), yb + 0.06, lerp(pz, u, 0.62), 0.055);
+      }
+      o.box(vm.Vector3(l, r + 0.06, u), vm.Vector3(0.84, 0.16, 0.48), yaw);
+    }
+    if (o.isEmpty) return;
+    refRoot.add(fs.Node(
+        name: 'BoostRingCantileverPiers',
+        mesh: fs.Mesh(o.build(), pbr(hexColor('#1B2434'), metallic: 0.78, roughness: 0.42))));
+  }
+
+  // ---------------------------------- WallToRailTransferGuides (demo)
+  /// Six faint cyan dashes (r .032 tubes, #38BDF8 @ .3 additive) along each
+  /// wall-to-rail jump's quadratic arc (launch -> apex -> land).
+  void _transferGuides() {
+    final buf = MeshBuf();
+    for (final t in (level.route['wallToRailTransfers'] as List<dynamic>? ?? const [])) {
+      vm.Vector3? v(String k) {
+        final p = t[k] as List<dynamic>?;
+        return p == null
+            ? null
+            : vm.Vector3((p[0] as num).toDouble(), (p[1] as num).toDouble(), (p[2] as num).toDouble());
+      }
+
+      final a = v('launchPos'), b = v('apexPos'), c = v('landPos');
+      if (a == null || b == null || c == null || a.distanceTo(c) > 28) continue;
+      vm.Vector3 q(double u) => a * ((1 - u) * (1 - u)) + b * (2 * u * (1 - u)) + c * (u * u);
+      for (int e = 0; e < 6; e++) {
+        final t0 = 0.14 + e / 6 * 0.72, t1 = math.min(0.88, t0 + 0.068);
+        final pts = [for (int k = 0; k <= 4; k++) q(t0 + (t1 - t0) * k / 4)];
+        _tube(buf, [for (final p in pts) w3(p.x, p.y, p.z)], 0.032, sides: 5);
+      }
+    }
+    if (buf.isEmpty) return;
+    _add(buf, unlit(hexColor('#38BDF8', 1.4, 0.3))..alphaMode = fs.AlphaMode.blend,
+        'WallToRailTransferGuides');
+  }
+
+  // ------------------------------------------ SecondaryOsmRoads (demo)
+  /// `_buildSecondaryOsmRoads`: 14 m tiles of the OSM side streets (width
+  /// clamped 5.2..15.5) away from the route (>= 11.5 m) and the Scramble
+  /// plaza / Stream podium; damp #16222E tarmac (rough .48) that reads much
+  /// darker than the moonlit wet asphalt around it.
+  void _secondaryRoads() {
+    final ways = (level.streets['ways'] as List<dynamic>?) ?? const [];
+    final wps = level.waypoints;
+    double routeDist(double x, double z) {
+      var best = double.infinity;
+      for (int i = 0; i + 1 < wps.length; i++) {
+        final a = wps[i], o = wps[i + 1];
+        if (a.y > 0.35 && o.y > 0.35) continue;
+        final sx = o.x - a.x, sz = o.z - a.z, l = sx * sx + sz * sz;
+        final u = l > 1e-6 ? (((x - a.x) * sx + (z - a.z) * sz) / l).clamp(0.0, 1.0) : 0.0;
+        final dx = x - (a.x + u * sx), dz = z - (a.z + u * sz);
+        best = math.min(best, dx * dx + dz * dz);
+      }
+      return math.sqrt(best);
+    }
+
+    final buf = MeshBuf();
+    for (final w in ways) {
+      final pts = w['points'] as List<dynamic>?;
+      if (pts == null || pts.length < 2) continue;
+      final width = ((w['width'] as num?)?.toDouble() ?? 9).clamp(5.2, 15.5);
+      for (int e = 0; e + 1 < pts.length; e++) {
+        final n = pts[e] as List<dynamic>, r = pts[e + 1] as List<dynamic>;
+        final nx = (n[0] as num).toDouble(), nz = (n[1] as num).toDouble();
+        final ox = (r[0] as num).toDouble() - nx, oz = (r[1] as num).toDouble() - nz;
+        final c = math.sqrt(ox * ox + oz * oz);
+        if (c < 1.2) continue;
+        final l = ox / c, u = oz / c;
+        final f = math.max(1, (c / 14).ceil());
+        final pl = c / f;
+        for (int k = 0; k < f; k++) {
+          final rr = (k + 0.5) * pl;
+          final cx = nx + l * rr, cz = nz + u * rr;
+          if (inScramblePlaza(cx, cz) || (cx > 218 && cx < 268 && cz > 186 && cz < 265) || routeDist(cx, cz) < 11.5) {
+            continue;
+          }
+          final hw = width / 2, hl = (pl + 0.9) / 2;
+          // right = (u, -l) in the reference frame
+          vm.Vector3 p(double a, double b) => vm.Vector3(cx + u * a + l * b, 0.012, cz - l * a + u * b);
+          buf.quad(p(-hw, -hl), p(hw, -hl), p(hw, hl), p(-hw, hl), vm.Vector3(0, 1, 0));
+        }
+      }
+    }
+    if (buf.isEmpty) return;
+    refRoot.add(fs.Node(
+        name: 'SecondaryOsmRoads',
+        mesh: fs.Mesh(buf.build(),
+            pbr(hexColor('#16222E'), emissive: hexColor('#0A1221', 0.22), roughness: 0.48, metallic: 0.06))));
+  }
 
   // ------------------------------------------- ShibuyaRiverWater (demo)
   /// `_buildShibuyaRiverCanal`: 12 m glossy water panels along the OSM river

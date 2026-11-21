@@ -52,6 +52,39 @@ class MeshBuf {
     }
   }
 
+  /// A capped frustum (three.js `CylinderGeometry(rTop, rBottom, |b-a|, seg)`)
+  /// from [a] (bottom) to [b] (top).
+  void cylinder(vm.Vector3 a, vm.Vector3 b, double rTop, double rBottom, {int seg = 8}) {
+    final axis = b - a;
+    final len = axis.length;
+    if (len < 1e-5) return;
+    final up = axis / len;
+    final ref = up.y.abs() < 0.9 ? vm.Vector3(0, 1, 0) : vm.Vector3(1, 0, 0);
+    final ex = ref.cross(up)..normalize();
+    final ez = up.cross(ex)..normalize();
+    final slope = (rBottom - rTop) / len;
+    for (int i = 0; i < seg; i++) {
+      final t0 = i / seg * math.pi * 2, t1 = (i + 1) / seg * math.pi * 2;
+      vm.Vector3 dir(double t) => ex * math.cos(t) + ez * math.sin(t);
+      final d0 = dir(t0), d1 = dir(t1);
+      final n0 = (d0 + up * slope)..normalize(), n1 = (d1 + up * slope)..normalize();
+      final i0 = vertex(a + d0 * rBottom, n0, i / seg, 1);
+      final i1 = vertex(a + d1 * rBottom, n1, (i + 1) / seg, 1);
+      final i2 = vertex(b + d1 * rTop, n1, (i + 1) / seg, 0);
+      final i3 = vertex(b + d0 * rTop, n0, i / seg, 0);
+      tri(i0, i2, i1);
+      tri(i0, i3, i2);
+      // caps
+      final c0 = vertex(b, up, 0.5, 0.5);
+      final c1 = vertex(b + d0 * rTop, up, 0.5, 0.5), c2 = vertex(b + d1 * rTop, up, 0.5, 0.5);
+      tri(c0, c2, c1);
+      final down = -up;
+      final c3 = vertex(a, down, 0.5, 0.5);
+      final c4 = vertex(a + d0 * rBottom, down, 0.5, 0.5), c5 = vertex(a + d1 * rBottom, down, 0.5, 0.5);
+      tri(c3, c4, c5);
+    }
+  }
+
   /// Axis-aligned-in-local-space box, rotated by [yaw] about Y.
   void box(vm.Vector3 center, vm.Vector3 size, double yaw,
       {vm.Vector4? color}) {
