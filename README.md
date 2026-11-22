@@ -1,3 +1,5 @@
+
+
 # NEON SCRAMBLE — Flutter Scene Edition
 
 A cross-platform 3D Flutter port of the **Gemini Neon Scramble** demo ([neon-scramble.ai.studio](https://neon-scramble.ai.studio/)), built with [`flutter_scene`](https://pub.dev/packages/flutter_scene) so the exact same Dart 3D codebase runs on **iOS**, **macOS**, and **Web**.
@@ -5,6 +7,9 @@ A cross-platform 3D Flutter port of the **Gemini Neon Scramble** demo ([neon-scr
 - Map data © OpenStreetMap contributors (ODbL).
 - **iOS & macOS**: Renders natively through **Impeller + Flutter GPU** (Metal).
 - **Web**: Renders automatically through `flutter_scene`'s built-in **WebGL2** backend (works under both CanvasKit and Skwasm, with no extra flags).
+
+Preview video here:
+https://x.com/LucasGoldner/status/2124441656867082289
 
 ## Gameplay & Features
 
